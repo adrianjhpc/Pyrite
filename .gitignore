@@ -1,3 +1,22 @@
-build
+# CMake / Build folders
+build/
+CMakeCache.txt
+CMakeFiles/
+Makefile
+*.cmake
+
+# Compiled Object files and Libraries
 *.o
-*~
+*.so
+*.dylib
+
+# Profiler Data Output
+*.mpic
+*_parsed.json
+
+# Python caches
+__pycache__/
+*.pyc
+
+# OS generated files
+.DS_Store
