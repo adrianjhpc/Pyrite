@@ -117,6 +117,8 @@ function initDashboard() {
 
     buildHardwareTopology(topology);
     seekToTime(0);
+
+    renderSpectrogram();
 }
 
 // Add a hostname map to the top of your file with the other globals
@@ -201,6 +203,94 @@ function buildHardwareTopology(nodesData) {
     camera.position.set(0, centerY, maxY > 0 ? maxY * 1.2 : 150);
     controls.target.set(0, centerY, 0);
     controls.update();
+}
+
+function renderSpectrogram() {
+    const stats = parsedData.statistics;
+    if (!stats) return;
+
+    const container = document.getElementById('spectrogramContainer');
+    container.innerHTML = ''; // Clear previous data
+
+    const calls = Object.keys(stats);
+    if (calls.length === 0) return;
+
+    const bins = Object.keys(stats[calls[0]]); // e.g., ["< 128B", "128B < 1KB", "1KB - 64KB", ...]
+
+    // Find the global maximum to scale our colors properly
+    let maxCount = 0;
+    calls.forEach(c => {
+        bins.forEach(b => {
+            if (stats[c][b] > maxCount) maxCount = stats[c][b];
+        });
+    });
+
+    // Build the HTML Table
+    const table = document.createElement('table');
+    table.style.borderCollapse = 'collapse';
+    table.style.width = '100%';
+    table.style.color = '#c9d1d9';
+    table.style.fontSize = '0.75rem';
+    table.style.fontFamily = "'Fira Code', monospace";
+
+    // Create the Header Row (Size Bins)
+    const thead = document.createElement('tr');
+    thead.appendChild(document.createElement('th')); // Empty top-left corner
+    bins.forEach(b => {
+        const th = document.createElement('th');
+        th.textContent = b.replace(' - ', '\n'); // Wrap text for space
+        th.style.padding = '4px 2px';
+        th.style.textAlign = 'center';
+        th.style.color = '#8b949e';
+        th.style.fontWeight = 'normal';
+        th.style.whiteSpace = 'pre-wrap'; // Allow newline
+        thead.appendChild(th);
+    });
+    table.appendChild(thead);
+
+    // Create the Data Rows (MPI Functions)
+    calls.forEach(call => {
+        const tr = document.createElement('tr');
+        
+        // Row Label (Remove "MPI_" to save horizontal space)
+        const tdLabel = document.createElement('td');
+        tdLabel.textContent = call.replace('MPI_', ''); 
+        tdLabel.style.padding = '4px 8px 4px 0';
+        tdLabel.style.textAlign = 'right';
+        tdLabel.style.color = '#8b949e';
+        tdLabel.style.fontWeight = '600';
+        tr.appendChild(tdLabel);
+
+        // Heatmap Cells
+        bins.forEach(bin => {
+            const count = stats[call][bin] || 0;
+            const td = document.createElement('td');
+
+            // Logarithmic color scaling (0.0 to 1.0 intensity)
+            let intensity = 0;
+            if (count > 0) {
+                // Math.max ensures even 1 message gets a faint color (0.15) instead of being invisible
+                intensity = Math.max(0.15, Math.log10(count + 1) / Math.log10(maxCount + 1));
+            }
+
+            td.style.backgroundColor = `rgba(88, 166, 255, ${intensity})`; // GitHub Blue
+            td.style.border = '1px solid #30363d'; // Cell grid lines
+            td.style.height = '24px';
+            
+            // Add a native hover tooltip so users can see the exact number
+            td.title = `${call} | ${bin}:\n${count.toLocaleString()} messages`; 
+
+            // This adds numbers inside the boxes
+            // td.textContent = count > 0 ? count : '';
+            // td.style.textAlign = 'center';
+            // td.style.color = intensity > 0.5 ? '#0d1117' : '#c9d1d9'; // Dynamic text contrast
+
+            tr.appendChild(td);
+        });
+        table.appendChild(tr);
+    });
+
+    container.appendChild(table);
 }
 
 function renderActiveCommunications() {
