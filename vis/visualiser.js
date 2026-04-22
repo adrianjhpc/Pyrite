@@ -247,8 +247,12 @@ function renderActiveCommunications() {
             const distance = vStart.distanceTo(vEnd);
             const vMid = new THREE.Vector3().addVectors(vStart, vEnd).multiplyScalar(0.5);
             const bulgeAmount = Math.max(20, distance * 0.4); 
-            vMid.x += bulgeAmount; 
-            vMid.z += bulgeAmount * 0.2; 
+            
+            // If sender is a lower number, bulge Right. If higher, bulge Left.
+            const laneOffset = (event.sender < event.receiver) ? 1 : -1;
+            
+            vMid.x += bulgeAmount * laneOffset; 
+            vMid.z += bulgeAmount * 0.2 * laneOffset; 
 
             const curve = new THREE.QuadraticBezierCurve3(vStart, vMid, vEnd);
             
@@ -256,12 +260,13 @@ function renderActiveCommunications() {
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
             const line = new THREE.Line(geometry, wireMaterial);
             linesGroup.add(line);
-            
+           
             const ageOfMessage = currentTime - event.time;
             
-            const FLIGHT_TIME = TIME_WINDOW * 0.04; 
+            // This forces the animation to clear the screen faster before the reply starts
+            const FLIGHT_TIME = TIME_WINDOW * 0.01; 
             
-            let progress = ageOfMessage / FLIGHT_TIME;
+            let progress = ageOfMessage / FLIGHT_TIME; 
             
             // Only draw the ball if it is currently in flight (progress between 0.0 and 1.0)
             if (progress >= 0 && progress <= 1.0) {
