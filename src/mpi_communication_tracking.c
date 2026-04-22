@@ -745,7 +745,7 @@ void add_p2p_small_data(int message_type, int sender, int receiver, int count, M
   int type_size = 0;
   // Some interceptors (like Wait/Barrier) will pass a dummy value. 
   // We only query the size if it's a real communication.
-  if (count > 0) {
+  if (count > 0 &&  datatype != MPI_DATATYPE_NULL) {
       MPI_Type_size(datatype, &type_size);
   }
   int total_bytes = count * type_size;
@@ -775,14 +775,14 @@ void add_p2p_large_data(int message_type, int sender1, int receiver1, int count1
 
   // Calculate exact byte volume for the first payload (e.g., Send portion)
   int type_size1 = 0;
-  if (count1 > 0) {
+  if (count1 > 0 && datatype1 != MPI_DATATYPE_NULL) {
       MPI_Type_size(datatype1, &type_size1);
   }
   int total_bytes1 = count1 * type_size1;
 
   // Calculate exact byte volume for the second payload (e.g., Receive portion)
   int type_size2 = 0;
-  if (count2 > 0) {
+  if (count2 > 0 && datatype2 != MPI_DATATYPE_NULL) {
       MPI_Type_size(datatype2, &type_size2);
   }
   int total_bytes2 = count2 * type_size2;
@@ -914,13 +914,23 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
 int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm){
   // Gather involves sending (sendcount) to the root, and the root receiving (recvcount).
   // We use the large data struct to capture both data types and counts.
-  add_p2p_large_data(MPI_GATHER_TYPE, my_rank, root, sendcount, sendtype, root, my_rank, recvcount, recvtype);
+  // If we are not the root, force the receive arguments to 0 and NULL so add_p2p_large_data safely ignores them.
+  int safe_recvcount = (my_rank == root) ? recvcount : 0;
+  MPI_Datatype safe_recvtype = (my_rank == root) ? recvtype : MPI_DATATYPE_NULL;
+
+  add_p2p_large_data(MPI_GATHER_TYPE, my_rank, root, sendcount, sendtype, root, my_rank, safe_recvcount, safe_recvtype);
+  
   return PMPI_Gather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
 }
 
 int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm){
   // Scatter involves root sending to the local rank.
-  add_p2p_large_data(MPI_SCATTER_TYPE, root, my_rank, sendcount, sendtype, my_rank, root, recvcount, recvtype);
+  // If we are not the root, force the send arguments to 0 and NULL so add_p2p_large_data safely ignores them.
+  int safe_sendcount = (my_rank == root) ? sendcount : 0;
+  MPI_Datatype safe_sendtype = (my_rank == root) ? sendtype : MPI_DATATYPE_NULL;
+
+  add_p2p_large_data(MPI_SCATTER_TYPE, root, my_rank, safe_sendcount, safe_sendtype, my_rank, root, recvcount, recvtype);
+  
   return PMPI_Scatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
 }
 
