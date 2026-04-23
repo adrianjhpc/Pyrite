@@ -26,12 +26,12 @@ document.addEventListener("DOMContentLoaded", () => {
     initThreeJS();
     document.getElementById("profileLoader").addEventListener("change", handleFileUpload);
     
-    // Fire frequently just to update the text label visually so it feels responsive
+    // Just update the text label visually while dragging so it feels responsive
     document.getElementById("timeSlider").addEventListener("input", (e) => {
         document.getElementById("currentTimeLabel").textContent = parseFloat(e.target.value).toFixed(3);
     });
     
-    // Fire once when the user lets go of the mouse, actually do the heavy loading
+    // When the user lets go of the mouse, actually do the heavy chunk load
     document.getElementById("timeSlider").addEventListener("change", handleManualSeek);
     
     document.getElementById("btn-play").addEventListener("click", togglePlayback);
@@ -131,10 +131,10 @@ function initDashboard() {
     objectsToRemove.forEach(obj => scene.remove(obj));
     clearLines();
 
-    const timeline = parsedData.timeline;
     const topology = parsedData.topology;
 
-    maxTime = timeline.length > 0 ? timeline[timeline.length - 1].time : 0;
+    const chunks = parsedData.chunks;
+    maxTime = (chunks && chunks.length > 0) ? chunks[chunks.length - 1].t_end : 0;
 
     if (maxTime > 0) {
          timeMultiplier = maxTime / 10.0;
@@ -142,18 +142,19 @@ function initDashboard() {
          timeMultiplier = 1;
     }    
 
-    document.getElementById("timeSlider").step = "any";
+    // Use "any" so the browser doesn't snap or lock the slider
+    document.getElementById("timeSlider").step = "any"; 
     document.getElementById("timeSlider").max = maxTime;
     document.getElementById("timeSlider").disabled = false;
     document.getElementById("btn-play").disabled = false;
 
     buildHardwareTopology(topology);
-
+    
+    // We must build the tables before we seek to 0
     renderSpectrogram();
     initDynamicSpectrogram();
-
+    
     seekToTime(0);
-
 }
 
 // Add a hostname map to the top of your file with the other globals
@@ -520,7 +521,7 @@ function renderActiveCommunications() {
 
 async function handleManualSeek(event) {
     pausePlayback();
-    // Because we use the 'change' event now, this only fires once when the mouse is released
+    // Await the new chunk loading before updating the UI
     await seekToTime(parseFloat(event.target.value));
 }
 
@@ -656,18 +657,17 @@ let isProcessingFrame = false;
 
 async function playLoop(timestamp) {
     if (!isPlaying) return;
-    
-    // Prevent overlapping frames if chunk loading takes longer than 16ms
-    if (isProcessingFrame) return; 
+
+    // Prevent overlapping frames if chunk loading takes longer than a standard monitor refresh
+    if (isProcessingFrame) return;
     isProcessingFrame = true;
 
-    const deltaTime = (timestamp - lastFrameTime) / 1000; 
+    const deltaTime = (timestamp - lastFrameTime) / 1000;
     lastFrameTime = timestamp;
-    
-    // Cap the delta: If a chunk took 500ms to load, we don't want the timeline 
-    // to instantly jump 500ms forward. We cap the visual jump to 50ms.
+
+    // Max visual jump is 50ms, protecting against chunk-load stutter
     const cappedDelta = Math.min(deltaTime, 0.05);
-    
+
     const speed = parseFloat(document.getElementById("speedSlider").value);
     let nextTime = currentTime + (cappedDelta * timeMultiplier * speed);
 
@@ -685,9 +685,9 @@ async function playLoop(timestamp) {
 
     // Await the seek. The loop will graciously pause here if it has to unzip a chunk
     await seekToTime(nextTime);
-    
+
     isProcessingFrame = false;
-    
+
     // Check isPlaying again, just in case the user hit pause while the chunk was loading
     if (isPlaying) {
         animationFrameId = requestAnimationFrame(playLoop);
