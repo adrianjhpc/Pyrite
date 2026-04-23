@@ -3,6 +3,7 @@ import json
 import sys
 import os
 import gzip
+import zlib
 
 # --- MPI Message Type Mapping ---
 MESSAGE_TYPES = {
@@ -186,14 +187,59 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
     else:
         data["hardware_blueprint"] = None 
 
-    # Export to Minified GZIP JSON
-    output_filename = mpic_filepath.replace(".mpic", "_parsed.json.gz")
+    # Prepare to chunk the timeline
+    CHUNK_SIZE = 500000 # 500k events per chunk
+    chunks_index = []
+    compressed_payloads = []
     
-    # Use gzip.open to compress on the fly
-    # Use separators=(',', ':') to strip all whitespace and newlines from the JSON
-    # Both of these approaches should help us keep the json file size down
-    with gzip.open(output_filename, 'wt', encoding='utf-8') as out_f:
-        json.dump(data, out_f, separators=(',', ':'))
+    current_byte_offset = 0
+
+    print("Compressing chunks...")
+    for i in range(0, len(data["timeline"]), CHUNK_SIZE):
+        chunk_data = data["timeline"][i : i + CHUNK_SIZE]
+        
+        # Compress this specific chunk
+        chunk_json = json.dumps(chunk_data, separators=(',', ':')).encode('utf-8')
+        compressed_chunk = zlib.compress(chunk_json)
+        
+        # Record where this chunk will live, and what time it covers
+        chunks_index.append({
+            "t_start": chunk_data[0]["time"],
+            "t_end": chunk_data[-1]["time"],
+            "offset": current_byte_offset,
+            "size": len(compressed_chunk)
+        })
+        
+        compressed_payloads.append(compressed_chunk)
+        current_byte_offset += len(compressed_chunk)
+
+    # Build the Header (Everything except the timeline)
+    header_data = {
+        "metadata": data["metadata"],
+        "topology": data["topology"],
+        "statistics": data["statistics"],
+        "hardware_blueprint": data["hardware_blueprint"],
+        "chunks": chunks_index # <-- The magic map!
+    }
+
+    header_json = json.dumps(header_data, separators=(',', ':')).encode('utf-8')
+    compressed_header = zlib.compress(header_json)
+    header_length = len(compressed_header)
+
+    # Write the Custom Wrapper File
+    output_filename = mpic_filepath.replace(".mpic", ".mpix")
+    with open(output_filename, 'wb') as f:
+        # Write exactly 4 bytes (an unsigned integer) telling the browser how big the header is
+        f.write(struct.pack('<I', header_length)) 
+        
+        # Write the compressed header
+        f.write(compressed_header)
+        
+        # Write the compressed chunks one by one
+        for payload in compressed_payloads:
+            f.write(payload)
+
+    print(f"Packed {len(chunks_index)} chunks into a single {output_filename} container.")
     
     print(f"Parsed {len(data['timeline'])} communication events.")
     print(f"Data saved to {output_filename}")
