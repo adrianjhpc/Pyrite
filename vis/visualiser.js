@@ -32,6 +32,10 @@ let activeLines = [];       // Currently rendered bezier curves
 let junctionPoints = [];    // Active receive/send ports
 let dynamicCells = {};      // HTML Table cell references
 
+// Memory Caches
+const sharedMaterials = {};
+const sharedSphereGeo = new THREE.SphereGeometry(1.5, 8, 8);
+
 // ==========================================
 // CONFIGURATION & CATEGORIES
 // ==========================================
@@ -145,6 +149,32 @@ function animateThreeJS() {
     });
 
     renderer.render(scene, camera);
+}
+
+function initSharedMaterials() {
+    // Build specific materials for each MPI call
+    Object.keys(MPI_CATEGORIES).forEach(call => {
+        const cat = MPI_CATEGORIES[call];
+        
+        sharedMaterials[call + "_line"] = new THREE.LineBasicMaterial({
+            color: cat.color,
+            transparent: true,
+            opacity: 0.5,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false 
+        });
+        
+        sharedMaterials[call + "_junction"] = new THREE.MeshBasicMaterial({
+            color: cat.color
+        });
+    });
+
+    // Build the fallback defaults
+    sharedMaterials["default_line"] = new THREE.LineBasicMaterial({
+        color: DEFAULT_CATEGORY.color,
+        transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false
+    });
+    sharedMaterials["default_junction"] = new THREE.MeshBasicMaterial({ color: DEFAULT_CATEGORY.color });
 }
 
 // ==========================================
@@ -580,28 +610,23 @@ function drawCommunicationLine(startPos, endPos, callName, sender, receiver) {
     const points = curve.getPoints(20); 
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
 
-    const material = new THREE.LineBasicMaterial({
-        color: cat.color,
-        transparent: true,
-        opacity: 0.5,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false 
-    });
+    const material = sharedMaterials[callName + "_line"] || sharedMaterials["default_line"];
 
     const line = new THREE.Line(geometry, material);
     line.name = "mpiLine";
     scene.add(line);
     activeLines.push(line);
 
-    // Create Junction Points at Node entry/exit
-    createJunctionPoint(points[1], cat.color);
-    createJunctionPoint(points[19], cat.color);
+    // Pass the callName instead of colorHex to the junction function
+    createJunctionPoint(points[1], callName);
+    createJunctionPoint(points[19], callName);
 }
 
-function createJunctionPoint(pos, colorHex) {
-    const geo = new THREE.SphereGeometry(1.5, 8, 8);
-    const mat = new THREE.MeshBasicMaterial({ color: colorHex });
-    const mesh = new THREE.Mesh(geo, mat);
+function createJunctionPoint(pos, callName) {
+    const mat = sharedMaterials[callName + "_junction"] || sharedMaterials["default_junction"];
+    
+    // We reuse the single sharedSphereGeo for every single junction
+    const mesh = new THREE.Mesh(sharedSphereGeo, mat);
     mesh.position.copy(pos);
     scene.add(mesh);
     junctionPoints.push(mesh);
@@ -609,17 +634,15 @@ function createJunctionPoint(pos, colorHex) {
 
 function clearLines() {
     activeLines.forEach(line => {
-        // Explicitly free the memory
+        // We only dispose the geometry now, because the curve is unique.
+        // We do not dispose the material, because it is shared.
         if (line.geometry) line.geometry.dispose();
-        if (line.material) line.material.dispose();
         scene.remove(line);
     });
     activeLines = [];
 
     junctionPoints.forEach(pt => {
-        // Explicitly free the memory
-        if (pt.geometry) pt.geometry.dispose();
-        if (pt.material) pt.material.dispose();
+        // We do not dispose geometry or material. Both are shared.
         scene.remove(pt);
     });
     junctionPoints = [];
