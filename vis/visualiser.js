@@ -241,7 +241,19 @@ function initDashboard() {
             objectsToRemove.push(child);
         }
     });
-    objectsToRemove.forEach(obj => scene.remove(obj));
+    objectsToRemove.forEach(obj => {
+        // Free the GPU memory for the nodes and ranks
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+            // Materials can sometimes be arrays
+            if (Array.isArray(obj.material)) {
+                obj.material.forEach(m => m.dispose());
+            } else {
+                obj.material.dispose();
+            }
+        }
+        scene.remove(obj);
+    });
     clearLines();
 
     const topology = parsedData.topology;
@@ -596,9 +608,20 @@ function createJunctionPoint(pos, colorHex) {
 }
 
 function clearLines() {
-    activeLines.forEach(line => scene.remove(line));
+    activeLines.forEach(line => {
+        // Explicitly free the memory
+        if (line.geometry) line.geometry.dispose();
+        if (line.material) line.material.dispose();
+        scene.remove(line);
+    });
     activeLines = [];
-    junctionPoints.forEach(pt => scene.remove(pt));
+
+    junctionPoints.forEach(pt => {
+        // Explicitly free the memory
+        if (pt.geometry) pt.geometry.dispose();
+        if (pt.material) pt.material.dispose();
+        scene.remove(pt);
+    });
     junctionPoints = [];
 }
 
