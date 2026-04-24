@@ -310,37 +310,58 @@ function initDashboard() {
 }
 
 function buildHardwareTopology(topology) {
-    // Group ranks by Node Hostname
     const nodesMap = {};
-    topology.forEach(proc => {
-        if (!nodesMap[proc.hostname]) {
-            nodesMap[proc.hostname] = { ranks: [], x: proc.x, y: proc.y, z: proc.z };
+
+    // Draw every node from the hardware blueprint (the empty shells)
+    if (parsedData.hardware_blueprint) {
+        const bp = parsedData.hardware_blueprint;
+        // Safely handle both Array and Object blueprint structures
+        if (Array.isArray(bp)) {
+            bp.forEach(node => {
+                const host = node.hostname || node.id || "unknown";
+                nodesMap[host] = { ranks: [], x: node.x || 0, y: node.y || 0, z: node.z || 0 };
+            });
+        } else {
+            Object.keys(bp).forEach(host => {
+                const node = bp[host];
+                nodesMap[host] = { ranks: [], x: node.x || 0, y: node.y || 0, z: node.z || 0 };
+            });
         }
-        nodesMap[proc.hostname].ranks.push(proc.rank);
+    }
+
+    // Add the scheduled MPI ranks from the active topology
+    topology.forEach(proc => {
+        const host = proc.hostname || "unknown";
+        if (!nodesMap[host]) {
+            nodesMap[host] = { ranks: [], x: proc.x || 0, y: proc.y || 0, z: proc.z || 0 };
+        }
+        
+        // Only push if there is a valid rank ID (ignores 'null' placeholders)
+        if (proc.rank !== undefined && proc.rank !== null && !nodesMap[host].ranks.includes(proc.rank)) {
+            nodesMap[host].ranks.push(proc.rank);
+        }
     });
 
     let nodeIndex = 0;
     const totalNodes = Object.keys(nodesMap).length;
     let maxY = 0;
 
-    // Build Nodes and Rank Blocks
+    // Create the Nodes and Rank Blocks in 3D
     for (const [hostname, data] of Object.entries(nodesMap)) {
         const nodeGroup = new THREE.Group();
 
-        // If the Python parser used the flat horizontal fallback (y=0, z=0),
-        // we override it to stack vertically so our X/Z lane routing works!
         let posX = data.x;
         let posY = data.y;
         let posZ = data.z;
 
-        if (posY === 0 && posZ === 0) {
+        // Vertical Tower Override (Stacks them if coordinates are flat 0,0,0)
+        if (posY === 0 && posZ === 0 && posX === 0) {
             posX = 0;
-            posY = nodeIndex * 15; // Stack vertically every 15 units
+            posY = nodeIndex * 15;
             posZ = 0;
         }
 
         if (posY > maxY) maxY = posY;
-
         nodeGroup.position.set(posX, posY, posZ);
 
         // The Hardware Node Shell
@@ -352,49 +373,63 @@ function buildHardwareTopology(topology) {
         shellMesh.name = "mpiNode";
         nodeGroup.add(shellMesh);
 
-        // Draw individual Process Ranks inside the Node
+        // Draw individual Process Ranks inside the Node (Skipped if unused!)
         const rankCount = data.ranks.length;
-        const cols = Math.ceil(Math.sqrt(rankCount));
-        const spacing = 8 / cols; 
-        let rIdx = 0;
+        if (rankCount > 0) {
+            const cols = Math.ceil(Math.sqrt(rankCount));
+            const spacing = 8 / cols; 
+            let rIdx = 0;
 
-        data.ranks.forEach(rankId => {
-            const row = Math.floor(rIdx / cols);
-            const col = rIdx % cols;
-            
-            const rankGeo = new THREE.BoxGeometry(spacing*0.8, spacing*0.8, spacing*0.8);
-            const rankMat = new THREE.MeshLambertMaterial({ 
-                color: 0x30363d, 
-                emissive: 0x000000, 
-                emissiveIntensity: 0 
+            data.ranks.forEach(rankId => {
+                const row = Math.floor(rIdx / cols);
+                const col = rIdx % cols;
+                
+                const rankGeo = new THREE.BoxGeometry(spacing*0.8, spacing*0.8, spacing*0.8);
+                const rankMat = new THREE.MeshLambertMaterial({ 
+                    color: 0x30363d, emissive: 0x000000, emissiveIntensity: 0 
+                });
+                const rankMesh = new THREE.Mesh(rankGeo, rankMat);
+                rankMesh.name = "mpiRank";
+                
+                rankMesh.position.set(
+                    (col * spacing) - 4 + (spacing/2),
+                    (row * spacing) - 4 + (spacing/2),
+                    0
+                );
+
+                nodeGroup.add(rankMesh);
+                rankMap.set(rankId, rankMesh); 
+                rIdx++;
             });
-            const rankMesh = new THREE.Mesh(rankGeo, rankMat);
-            rankMesh.name = "mpiRank";
-            
-            // Position rank inside the node shell
-            rankMesh.position.set(
-                (col * spacing) - 4 + (spacing/2),
-                (row * spacing) - 4 + (spacing/2),
-                0
-            );
-
-            nodeGroup.add(rankMesh);
-            rankMap.set(rankId, rankMesh); 
-            rIdx++;
-        });
+        }
 
         scene.add(nodeGroup);
         nodeMap.set(hostname, nodeGroup);
         nodeIndex++;
     }
 
-    // Center the camera on the middle of the tower, and pull back based on height
+    // Build the wireframe server rack encapsulating the whole tower
+    if (totalNodes > 0) {
+        const cabinetGeo = new THREE.BoxGeometry(20, maxY + 20, 20);
+        const cabinetMat = new THREE.MeshBasicMaterial({
+            color: 0x30363d,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.15 // Very faint ghost outline
+        });
+        const cabinetMesh = new THREE.Mesh(cabinetGeo, cabinetMat);
+        cabinetMesh.name = "cabinetBox";
+        cabinetMesh.position.set(0, maxY / 2, 0); // Center it
+        scene.add(cabinetMesh);
+    }
+
+    // Centre the camera on the middle of the tower
     const centerY = maxY / 2;
     const distanceToPullBack = Math.max(300, totalNodes * 20);
 
     camera.position.set(0, centerY, distanceToPullBack);
     controls.target.set(0, centerY, 0);
-    controls.update(); // Apply the new camera angle
+    controls.update(); 
 }
 
 // ===============
