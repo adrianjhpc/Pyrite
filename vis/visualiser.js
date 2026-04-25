@@ -34,7 +34,7 @@ let dynamicCells = {};      // HTML Table cell references
 
 // Memory Caches
 const sharedMaterials = {};
-const sharedSphereGeo = new THREE.SphereGeometry(0.5, 8, 8);
+const sharedSphereGeo = new THREE.SphereGeometry(0.2, 8, 8);
 
 // ==========================================
 // CONFIGURATION & CATEGORIES
@@ -737,9 +737,56 @@ function renderActiveCommunications() {
         });
 
         if (sNode && rNode) {
-            drawCommunicationLine(sNode.position, rNode.position, event.call, event.sender, event.receiver);
+            // If the communications are inside a single node.
+            if (sNode === rNode) {
+                // Draw rank-to-rank.
+                const sRankMesh = rankMap.get(event.sender);
+                const rRankMesh = rankMap.get(event.receiver);
+
+                if (sRankMesh && rRankMesh) {
+                    const startWorld = new THREE.Vector3();
+                    const endWorld = new THREE.Vector3();
+                    
+                    // Extract the absolute global 3D coordinates of the specific cores
+                    sRankMesh.getWorldPosition(startWorld);
+                    rRankMesh.getWorldPosition(endWorld);
+
+                    drawIntraNodeLine(startWorld, endWorld, event.call);
+                }
+            } else {
+                // They are on different nodes. Draw node-to-node across the network.
+                drawCommunicationLine(sNode.position, rNode.position, event.call, event.sender, event.receiver);
+            }
         }
     });
+}
+
+function drawIntraNodeLine(startPos, endPos, callName) {
+    const cat = MPI_CATEGORIES[callName] || DEFAULT_CATEGORY;
+
+    const midPoint = startPos.clone().lerp(endPos, 0.5);
+    const distance = startPos.distanceTo(endPos);
+
+    // Bow straight out towards the user so the line doesn't cut through the cores
+    const bowDistance = Math.max(distance * 0.4, 1.0); 
+    midPoint.z += bowDistance;
+
+    const curve = new THREE.QuadraticBezierCurve3(startPos, midPoint, endPos);
+    
+    // We only need 10 points for these tiny lines (saves visualisation memory)
+    const points = curve.getPoints(10); 
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+
+    const material = sharedMaterials[callName + "_line"] || sharedMaterials["default_line"];
+
+    const line = new THREE.Line(geometry, material);
+    line.name = "mpiLine";
+    scene.add(line);
+    activeLines.push(line);
+
+    // Add tiny junction points at the core boundaries
+    createJunctionPoint(points[1], callName);
+    createJunctionPoint(points[9], callName);
 }
 
 function drawCommunicationLine(startPos, endPos, callName, sender, receiver) {
