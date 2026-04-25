@@ -34,7 +34,7 @@ let dynamicCells = {};      // HTML Table cell references
 
 // Memory Caches
 const sharedMaterials = {};
-const sharedSphereGeo = new THREE.SphereGeometry(1.5, 8, 8);
+const sharedSphereGeo = new THREE.SphereGeometry(0.5, 8, 8);
 
 // ==========================================
 // CONFIGURATION & CATEGORIES
@@ -391,7 +391,10 @@ function buildHardwareTopology(topology) {
 
     const sharedNodeGeo = new THREE.BoxGeometry(10, 10, 10);
     const sharedNodeEdges = new THREE.EdgesGeometry(sharedNodeGeo);
-    const sharedNodeMat = new THREE.LineBasicMaterial({ color: 0x58a6ff, transparent: true, opacity: 0.6 });
+    
+    // 1. Split Node Materials (Active = Bright Blue, Idle = Ghostly Gray)
+    const sharedActiveNodeMat = new THREE.LineBasicMaterial({ color: 0x58a6ff, transparent: true, opacity: 0.8 }); 
+    const sharedIdleNodeMat = new THREE.LineBasicMaterial({ color: 0x4b5563, transparent: true, opacity: 0.2 });   
 
     const sharedFillGeo = new THREE.BoxGeometry(9.8, 9.8, 9.8);
     const sharedFillMat = new THREE.MeshBasicMaterial({ color: 0x161b22, transparent: true, opacity: 0.9 });
@@ -399,13 +402,10 @@ function buildHardwareTopology(topology) {
     const sharedChipMat = new THREE.MeshBasicMaterial({ color: 0x21262d, transparent: true, opacity: 0.8 });
     
     const sharedActiveRankMat = new THREE.MeshLambertMaterial({ color: 0x4b5563, emissive: 0x58a6ff, emissiveIntensity: 0.15 });
-    const sharedIdleCoreMat = new THREE.MeshBasicMaterial({ 
-        color: 0x4b5563, // Lighter slate gray
-        wireframe: true, 
-        transparent: true, 
-        opacity: 0.8     // Boosted visibility
-    });   
- 
+    
+    // 2. Make Idle Cores a solid, brighter gray (wireframes vanish on high-res screens)
+    const sharedIdleCoreMat = new THREE.MeshBasicMaterial({ color: 0x6e7681, transparent: true, opacity: 0.6 });
+    
     const sharedCabinetMat = new THREE.LineBasicMaterial({ color: 0x8b949e, transparent: true, opacity: 0.5 });
 
     // Caches for dynamically sized geometries (since core sizes depend on hardware specs)
@@ -431,7 +431,12 @@ function buildHardwareTopology(topology) {
         nodeGroup.position.set(posX, posY, posZ);
 
         // --- OUTER NODE SHELL ---
-        const shellMesh = new THREE.LineSegments(sharedNodeEdges, sharedNodeMat);
+        // Check if the node is actively used in the trace
+        const isActiveNode = data.ranks.length > 0;
+        const currentNodeMat = isActiveNode ? sharedActiveNodeMat : sharedIdleNodeMat;
+
+        // Apply the correct color based on activity
+        const shellMesh = new THREE.LineSegments(sharedNodeEdges, currentNodeMat);
         shellMesh.name = "mpiNode";
         nodeGroup.add(shellMesh);
 
@@ -439,7 +444,7 @@ function buildHardwareTopology(topology) {
         fillMesh.name = "mpiNodeFill";
         nodeGroup.add(fillMesh);
 
-        // --- CHIP AND CORE LAYOUT ---
+       // --- CHIP AND CORE LAYOUT (Perfect Square Packing) ---
         let numChips = data.cpus;
         let numCores = data.coresPerCpu;
 
@@ -455,11 +460,19 @@ function buildHardwareTopology(topology) {
 
         const coreCols = Math.ceil(Math.sqrt(numCores));
         const coreRows = Math.ceil(numCores / coreCols);
-        const coreSpacingX = (chipSpacingX * 0.9) / coreCols;
-        const coreSpacingY = (chipSpacingY * 0.9) / coreRows;
-        const coreSize = Math.min(coreSpacingX, coreSpacingY) * 0.8; 
+        
+        // Find the maximum space we can give each core while keeping it a perfect square
+        const maxCoreSpacingX = (chipSpacingX * 0.85) / coreCols;
+        const maxCoreSpacingY = (chipSpacingY * 0.85) / coreRows;
+        
+        // Lock the spacing to form a perfect grid!
+        const coreSpacing = Math.min(maxCoreSpacingX, maxCoreSpacingY);
+        const coreSize = coreSpacing * 0.75; // 25% gap between cores
 
-        // Cache the Chip and Core geometries based on their calculated sizes
+        // Find the absolute width/height of the new perfectly square grid
+        const actualGridWidth = coreCols * coreSpacing;
+        const actualGridHeight = coreRows * coreSpacing;
+
         const cacheKey = `${numChips}_${numCores}`;
         if (!geometryCache[cacheKey]) {
             geometryCache[cacheKey] = {
@@ -474,36 +487,40 @@ function buildHardwareTopology(topology) {
             const chipOffsetX = (cCol * chipSpacingX) - 4.25 + (chipSpacingX / 2);
             const chipOffsetY = (cRow * chipSpacingY) - 4.25 + (chipSpacingY / 2);
 
-            // Draw Chip Backplate (Using Shared Resources)
+            // Draw Chip Backplate (Pushed forward to Z = 4.0 so it isn't buried)
             const chipMesh = new THREE.Mesh(geometryCache[cacheKey].chip, sharedChipMat);
-            chipMesh.position.set(chipOffsetX, chipOffsetY, 4.0); // Pushed forward to Z = 4.0
+            chipMesh.position.set(chipOffsetX, chipOffsetY, 4.0); 
             nodeGroup.add(chipMesh);
+
+            // Center the square grid perfectly inside the chip
+            const startX = chipOffsetX - (actualGridWidth / 2) + (coreSpacing / 2);
+            const startY = chipOffsetY - (actualGridHeight / 2) + (coreSpacing / 2);
 
             for (let i = 0; i < numCores; i++) {
                 const iRow = Math.floor(i / coreCols);
                 const iCol = i % coreCols;
-                const coreOffsetX = chipOffsetX + (iCol * coreSpacingX) - (chipSpacingX * 0.45) + (coreSpacingX / 2);
-                const coreOffsetY = chipOffsetY + (iRow * coreSpacingY) - (chipSpacingY * 0.45) + (coreSpacingY / 2);
+                
+                const coreOffsetX = startX + (iCol * coreSpacing);
+                const coreOffsetY = startY + (iRow * coreSpacing);
 
                 const activeRank = data.ranks.find(r => r.chip === c && r.core === i);
 
                 if (activeRank) {
+                    // Clone the material so it lights up individually when messages hit!
                     const uniqueRankMat = sharedActiveRankMat.clone();
-                    
                     const rankMesh = new THREE.Mesh(geometryCache[cacheKey].core, uniqueRankMat);
                     rankMesh.name = "mpiRank";
-                    rankMesh.position.set(coreOffsetX, coreOffsetY, 4.5); // Pushed forward to Z = 4.5
+                    rankMesh.position.set(coreOffsetX, coreOffsetY, 4.5); // Pressed against the glass (Z=4.5)
                     nodeGroup.add(rankMesh);
                     rankMap.set(activeRank.id, rankMesh); 
                 } else {
-                    // Idle Cores don't light up dynamically, so they can safely share the material
                     const idleMesh = new THREE.Mesh(geometryCache[cacheKey].core, sharedIdleCoreMat);
                     idleMesh.name = "idleCore";
-                    idleMesh.position.set(coreOffsetX, coreOffsetY, 4.5); // Pushed forward to Z = 4.5
+                    idleMesh.position.set(coreOffsetX, coreOffsetY, 4.5); // Pressed against the glass (Z=4.5)
                     nodeGroup.add(idleMesh);
                 }
             }
-        }
+        } 
 
         scene.add(nodeGroup);
         nodeMap.set(hostname, nodeGroup);
