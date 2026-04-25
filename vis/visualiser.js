@@ -137,17 +137,20 @@ function initThreeJS() {
     animateThreeJS();
 }
 
+
 function animateThreeJS() {
     requestAnimationFrame(animateThreeJS);
     controls.update();
     
-    // Smoothly decay the emissive glow of rank processes
-    rankMap.forEach(mesh => {
-        if (mesh.material.emissiveIntensity > 0) {
-            mesh.material.emissiveIntensity -= 0.02; // Fade out over ~50 frames
-            if (mesh.material.emissiveIntensity < 0) mesh.material.emissiveIntensity = 0;
-        }
-    });
+    // Only decay the emissive glow if the timeline is actively playing!
+    if (isPlaying) {
+        rankMap.forEach(mesh => {
+            if (mesh.material.emissiveIntensity > 0) {
+                mesh.material.emissiveIntensity -= 0.02; // Fade out over ~50 frames
+                if (mesh.material.emissiveIntensity < 0) mesh.material.emissiveIntensity = 0;
+            }
+        });
+    }
 
     renderer.render(scene, camera);
 }
@@ -444,30 +447,33 @@ function buildHardwareTopology(topology) {
         fillMesh.name = "mpiNodeFill";
         nodeGroup.add(fillMesh);
 
-       // --- CHIP AND CORE LAYOUT (Perfect Square Packing) ---
-        let numChips = data.cpus;
-        let numCores = data.coresPerCpu;
+        // --- CHIP AND CORE LAYOUT (Strict Hardware Packing) ---
+        // Lock the grid size strictly to the hardware blueprint topology.
+        // We no longer dynamically expand based on messy OS logical core IDs.
+        const numChips = data.cpus;
+        const numCores = data.coresPerCpu;
 
-        data.ranks.forEach(r => {
-            if (r.chip >= numChips) numChips = r.chip + 1;
-            if (r.core >= numCores) numCores = r.core + 1;
-        });
+        // Sort all ranks on this node sequentially by ID
+        const sortedRanks = data.ranks.sort((a, b) => a.id - b.id);
 
         const chipCols = Math.ceil(Math.sqrt(numChips));
         const chipRows = Math.ceil(numChips / chipCols);
-        const chipSpacingX = 8.5 / chipCols; 
-        const chipSpacingY = 8.5 / chipRows;
+        
+        const chipSpacingX = 9.2 / chipCols; 
+        const chipSpacingY = 9.2 / chipRows;
 
         const coreCols = Math.ceil(Math.sqrt(numCores));
         const coreRows = Math.ceil(numCores / coreCols);
         
-        // Find the maximum space we can give each core while keeping it a perfect square
-        const maxCoreSpacingX = (chipSpacingX * 0.85) / coreCols;
-        const maxCoreSpacingY = (chipSpacingY * 0.85) / coreRows;
+        // Reduce padding so cores pack tightly together
+        const maxCoreSpacingX = (chipSpacingX * 0.90) / coreCols; 
+        const maxCoreSpacingY = (chipSpacingY * 0.90) / coreRows;
         
-        // Lock the spacing to form a perfect grid!
+        // Lock the spacing to form a perfect square grid
         const coreSpacing = Math.min(maxCoreSpacingX, maxCoreSpacingY);
-        const coreSize = coreSpacing * 0.75; // 25% gap between cores
+        
+        // Make the physical core block take up 90% of its available space
+        const coreSize = coreSpacing * 0.90; 
 
         // Find the absolute width/height of the new perfectly square grid
         const actualGridWidth = coreCols * coreSpacing;
@@ -484,10 +490,10 @@ function buildHardwareTopology(topology) {
         for (let c = 0; c < numChips; c++) {
             const cRow = Math.floor(c / chipCols);
             const cCol = c % chipCols;
-            const chipOffsetX = (cCol * chipSpacingX) - 4.25 + (chipSpacingX / 2);
-            const chipOffsetY = (cRow * chipSpacingY) - 4.25 + (chipSpacingY / 2);
+            const chipOffsetX = (cCol * chipSpacingX) - 4.6 + (chipSpacingX / 2);
+            const chipOffsetY = (cRow * chipSpacingY) - 4.6 + (chipSpacingY / 2);
 
-            // Draw Chip Backplate (Pushed forward to Z = 4.0 so it isn't buried)
+            // Draw Chip Backplate 
             const chipMesh = new THREE.Mesh(geometryCache[cacheKey].chip, sharedChipMat);
             chipMesh.position.set(chipOffsetX, chipOffsetY, 4.0); 
             nodeGroup.add(chipMesh);
@@ -503,24 +509,25 @@ function buildHardwareTopology(topology) {
                 const coreOffsetX = startX + (iCol * coreSpacing);
                 const coreOffsetY = startY + (iRow * coreSpacing);
 
-                const activeRank = data.ranks.find(r => r.chip === c && r.core === i);
+                // Calculate the true physical index (e.g., slot 0 to 47) and just grab the next rank
+                const globalSlotIndex = (c * numCores) + i;
+                const activeRank = sortedRanks[globalSlotIndex];
 
                 if (activeRank) {
-                    // Clone the material so it lights up individually when messages hit!
                     const uniqueRankMat = sharedActiveRankMat.clone();
                     const rankMesh = new THREE.Mesh(geometryCache[cacheKey].core, uniqueRankMat);
                     rankMesh.name = "mpiRank";
-                    rankMesh.position.set(coreOffsetX, coreOffsetY, 4.5); // Pressed against the glass (Z=4.5)
+                    rankMesh.position.set(coreOffsetX, coreOffsetY, 4.5); 
                     nodeGroup.add(rankMesh);
                     rankMap.set(activeRank.id, rankMesh); 
                 } else {
                     const idleMesh = new THREE.Mesh(geometryCache[cacheKey].core, sharedIdleCoreMat);
                     idleMesh.name = "idleCore";
-                    idleMesh.position.set(coreOffsetX, coreOffsetY, 4.5); // Pressed against the glass (Z=4.5)
+                    idleMesh.position.set(coreOffsetX, coreOffsetY, 4.5); 
                     nodeGroup.add(idleMesh);
                 }
             }
-        } 
+        }
 
         scene.add(nodeGroup);
         nodeMap.set(hostname, nodeGroup);
