@@ -83,7 +83,8 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
     large_size = struct.calcsize(p2p_large_fmt)
 
     data = {
-        "metadata": {"total_ranks": 0, "date": "" , "program": "unknown"},
+        # --- NEW: Added system_name default ---
+        "metadata": {"total_ranks": 0, "date": "" , "program": "unknown", "system_name": "Unknown Cluster"},
         "topology": [],
         "timeline": [],
         "statistics": {}
@@ -98,7 +99,7 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
     }
 
     with open(mpic_filepath, 'rb') as f:
-        # i = integer (4 bytes), 64s = string (64 bytes), 256s = string (256 bytes)
+        # i = integer (4 bytes), 64s = string (64 bytes), 1024s = string (1024 bytes)
         global_header_fmt = '=i 64s 1024s' 
         global_header_size = struct.calcsize(global_header_fmt)
         
@@ -196,7 +197,12 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
     # Attach the hardware blueprint
     if hw_filepath and os.path.exists(hw_filepath):
         with open(hw_filepath, 'r') as f:
-            data["hardware_blueprint"] = json.load(f)
+            blueprint = json.load(f)
+            data["hardware_blueprint"] = blueprint
+            
+            # Extract the system_name from the topology json
+            if "metadata" in blueprint and "system_name" in blueprint["metadata"]:
+                data["metadata"]["system_name"] = blueprint["metadata"]["system_name"]
     else:
         data["hardware_blueprint"] = None 
 
@@ -232,7 +238,7 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
         "topology": data["topology"],
         "statistics": data["statistics"],
         "hardware_blueprint": data["hardware_blueprint"],
-        "chunks": chunks_index # <-- The magic map!
+        "chunks": chunks_index 
     }
 
     header_json = json.dumps(header_data, separators=(',', ':')).encode('utf-8')

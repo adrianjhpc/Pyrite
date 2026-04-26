@@ -1076,7 +1076,10 @@ function renderMetadata() {
     const meta = parsedData.metadata || parsedData.info || {};
     const programName = meta.program || meta.executable || meta.name || "Unknown Program";
     const runDate = meta.date || meta.timestamp || "Unknown Date";
-    
+   
+    // Extract the topology metadata from the parsed .mpix file
+    const systemName = meta.system_name || "Unknown System";
+ 
     // Calculate scale from topology
     const totalRanks = parsedData.topology ? parsedData.topology.length : 0;
     
@@ -1095,6 +1098,7 @@ function renderMetadata() {
         <div style="color: #c9d1d9; font-family: 'Fira Code', monospace; font-size: 0.85rem; line-height: 1.6;">
             <div><span style="color: #58a6ff;">Program:</span> ${programName}</div>
             <div><span style="color: #58a6ff;">Date:</span> ${runDate}</div>
+            <div><span style="color: #58a6ff;">System:</span> ${systemName}</div>
             <div><span style="color: #58a6ff;">Scale:</span> ${totalRanks} Ranks across ${totalActiveNodes} Nodes</div>
         </div>
     `;
