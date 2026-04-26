@@ -971,8 +971,6 @@ function renderSpectrogram() {
     table.style.borderCollapse = 'separate';
     table.style.borderSpacing = '3px';
     
-    // ... (Headers omitted for brevity, logic identical to previous dynamic block) ...
-    
     const stats = parsedData.statistics;
     const calls = Object.keys(stats);
     if (calls.length === 0) return;
@@ -991,12 +989,16 @@ function renderSpectrogram() {
         tr.appendChild(tdLabel);
 
         // Blocks
-        Object.values(stats[call]).forEach(val => {
+        // Using Object.entries instead of Object.values so we can grab the 'bin' name for the tooltip
+        Object.entries(stats[call]).forEach(([bin, val]) => {
             const td = document.createElement('td');
             td.style.border = 'none';
             td.style.borderRadius = '3px';
             td.style.height = '20px';
             td.style.width = '35px';
+            
+            // --- THE FIX: Add the native browser tooltip ---
+            td.title = `${call} (${bin}): ${val} total messages`;
             
             if (val === 0) {
                 td.style.backgroundColor = '#161b22';
@@ -1046,6 +1048,9 @@ function initDynamicSpectrogram() {
             td.style.backgroundColor = '#161b22';
             td.style.transition = 'background-color 0.15s ease-out'; 
             
+            // --- THE FIX: Add the initial blank tooltip ---
+            td.title = `${call} (${bin}): 0 active messages`;
+            
             dynamicCells[call][bin] = td;
             tr.appendChild(td);
         });
@@ -1066,7 +1071,7 @@ function updateDynamicSpectrogram(activeEvents) {
         binsTemplate.forEach(b => currentCounts[c][b] = 0);
     });
 
-    // --- NEW: Only tally the specific events active in the 3D scene right now ---
+    // Only tally the specific events active in the 3D scene right now
     for (let i = 0; i < activeEvents.length; i++) {
         const event = activeEvents[i];
         const call = event.call;
@@ -1088,6 +1093,10 @@ function updateDynamicSpectrogram(activeEvents) {
         binsTemplate.forEach(bin => {
             const count = currentCounts[call][bin];
             const td = dynamicCells[call][bin];
+            
+            // --- THE FIX: Dynamically update the tooltip with the live count ---
+            td.title = `${call} (${bin}): ${count} active messages`;
+            
             if (count === 0) {
                 td.style.backgroundColor = '#161b22';
             } else {
