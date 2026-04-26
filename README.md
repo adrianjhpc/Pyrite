@@ -144,11 +144,11 @@ The visualiser runs entirely in your browser without needing a web server.
 2. Click **"Load Profile"** in the sidebar.
 3. Select the `.mpix` file generated in the previous step.
 4. Camera Controls:
- - **Orbit**: Left Click + Drag
- - **Pan**: Right Click + Drag (or use the arrow keys)
- - **Zoom*: Scroll Wheel
- - **Focus*: Click on any node or core to automatically fly the camera to that location.
- 5. Hit **Play** (or scrub the timeline slider) to watch data packets move. Hover your mouse over any glowing core to see its hardware assignment tooltips.
+ * **Orbit**: Left Click + Drag
+ * **Pan**: Right Click + Drag (or use the arrow keys)
+ * **Zoom**: Scroll Wheel
+ * **Focus**: Click on any node or core to automatically fly the camera to that location.
+5. Hit **Play** (or scrub the timeline slider) to watch data packets move. Hover your mouse over any glowing core to see its hardware assignment tooltips.
 
 ---
 
