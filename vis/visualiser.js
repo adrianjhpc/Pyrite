@@ -558,7 +558,7 @@ function buildHardwareTopology(topology) {
 
             // Draw Chip Backplate 
             const chipMesh = new THREE.Mesh(geometryCache[cacheKey].chip, sharedChipMat);
-            chipMesh.position.set(chipOffsetX, chipOffsetY, 4.0); 
+            chipMesh.position.set(chipOffsetX, chipOffsetY, 5.01); 
             nodeGroup.add(chipMesh);
 
             // Center the square grid perfectly inside the chip
@@ -580,7 +580,7 @@ function buildHardwareTopology(topology) {
                     const uniqueRankMat = sharedActiveRankMat.clone();
                     const rankMesh = new THREE.Mesh(geometryCache[cacheKey].core, uniqueRankMat);
                     rankMesh.name = "mpiRank";
-                    rankMesh.position.set(coreOffsetX, coreOffsetY, 4.5); 
+                    rankMesh.position.set(coreOffsetX, coreOffsetY, 5.2); 
                     nodeGroup.add(rankMesh);
                     rankMap.set(activeRank.id, rankMesh); 
                 } else {
