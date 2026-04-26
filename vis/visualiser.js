@@ -41,6 +41,7 @@ const sharedSphereGeo = new THREE.SphereGeometry(0.2, 8, 8);
 
 // Creating glyph for communication direction
 const sharedArrowGeo = new THREE.ConeGeometry(0.25, 0.8, 8);
+sharedArrowGeo.translate(0, -0.4, 0);
 sharedArrowGeo.rotateX(Math.PI / 2);
 
 // 3D HOVER TOOLTIPS
@@ -912,7 +913,7 @@ function renderActiveCommunications() {
 
         if (event.sender === event.receiver) return;
 
-        // Line Routing Logic
+       // Line Routing Logic
         const sNode = rankToNodeGroup.get(event.sender);
         const rNode = rankToNodeGroup.get(event.receiver);
 
@@ -928,12 +929,11 @@ function renderActiveCommunications() {
                     sRankMesh.getWorldPosition(startWorld);
                     rRankMesh.getWorldPosition(endWorld);
 
-                    // Pull points to the front surface of the 3D core 
-                    // BoxGeometry depth is stored in parameters.depth. Add 0.1 for a clean weld
+                    // --- THE FIX: Increased padding to 0.5 ---
                     const sDepth = sRankMesh.geometry.parameters.depth || 1.0;
                     const rDepth = rRankMesh.geometry.parameters.depth || 1.0;
-                    startWorld.z += (sDepth / 2) + 0.1;
-                    endWorld.z += (rDepth / 2) + 0.1;
+                    startWorld.z += (sDepth / 2) + 0.5;
+                    endWorld.z += (rDepth / 2) + 0.5;
 
                     drawIntraNodeLine(startWorld, endWorld, event.call);
                 }
@@ -942,9 +942,9 @@ function renderActiveCommunications() {
                     const startWorld = sNode.position.clone();
                     const endWorld = rNode.position.clone();
                     
-                    // Nodes are 10x10x10 boxes, so pull forward by 5.1 
-                    startWorld.z += 5.1;
-                    endWorld.z += 5.1;
+                    // Padding to 5.5 (5.0 for node half-depth + 0.5 padding) to allow termination to be visible
+                    startWorld.z += 5.5;
+                    endWorld.z += 5.5;
 
                     drawCommunicationLine(startWorld, endWorld, event.call, event.sender, event.receiver);
                 } else {
@@ -958,17 +958,17 @@ function renderActiveCommunications() {
                         sRankMesh.getWorldPosition(startWorld);
                         rRankMesh.getWorldPosition(endWorld);
 
-                        // Pull points to the front surface of the 3D core 
                         const sDepth = sRankMesh.geometry.parameters.depth || 1.0;
                         const rDepth = rRankMesh.geometry.parameters.depth || 1.0;
-                        startWorld.z += (sDepth / 2) + 0.1;
-                        endWorld.z += (rDepth / 2) + 0.1;
+                        // Padd with 0.5 to allow termination to be visible
+                        startWorld.z += (sDepth / 2) + 0.5;
+                        endWorld.z += (rDepth / 2) + 0.5;
 
                         drawCommunicationLine(startWorld, endWorld, event.call, event.sender, event.receiver);
                     }
                 }
             }
-        }
+        } 
     });
 
     return activeEvents;
