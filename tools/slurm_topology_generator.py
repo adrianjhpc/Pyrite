@@ -2,6 +2,7 @@ import re
 import json
 import argparse
 import sys
+import subprocess
 
 def expand_slurm_nodes(node_str):
     """
@@ -32,7 +33,22 @@ def expand_slurm_nodes(node_str):
         
     return nodes
 
-def parse_topo_file(filepath, racks_per_cabinet=4):
+def get_slurm_cluster_name():
+    """Attempts to query Slurm locally for the cluster name."""
+    try:
+        # Run 'scontrol show config' and capture the output
+        result = subprocess.run(['scontrol', 'show', 'config'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        for line in result.stdout.split('\n'):
+            if 'ClusterName' in line:
+                # Output looks like: "ClusterName             = my_cluster"
+                return line.split('=')[1].strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Command failed or scontrol is not installed on this machine
+        pass
+    
+    return "Unknown Slurm Cluster"
+
+def parse_topo_file(filepath, racks_per_cabinet, system_name):
     """Parses a Slurm topo file and builds the hardware JSON map."""
     switches = []
     
@@ -57,10 +73,16 @@ def parse_topo_file(filepath, racks_per_cabinet=4):
         print(f"Error: Could not find {filepath}")
         sys.exit(1)
 
-    return build_json_topology(switches, racks_per_cabinet)
+    return build_json_topology(switches, racks_per_cabinet, system_name)
 
-def build_json_topology(switches, racks_per_cabinet):
-    topology = {"cabinets": []}
+def build_json_topology(switches, racks_per_cabinet, system_name):
+    # --- NEW: Restructured to include a root-level metadata object ---
+    topology = {
+        "metadata": {
+            "system_name": system_name
+        },
+        "cabinets": []
+    }
     
     # 3D Visualizer spacing settings
     cabinet_spacing_x = 100
@@ -111,15 +133,24 @@ def build_json_topology(switches, racks_per_cabinet):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Slurm topo output to a JSON hardware map.")
     parser.add_argument("topo_file", type=str, help="Text file containing the output of 'scontrol show topo'")
+    
+    # System metadata
+    parser.add_argument("--system_name", type=str, default=None, help="Global name of the cluster. If omitted, attempts to fetch automatically from Slurm.")
+    
     parser.add_argument("--racks_per_cab", type=int, default=4, help="How many switches/racks to group visually into one cabinet")
     parser.add_argument("--out", type=str, default="hardware_map.json", help="Output filename")
     
     args = parser.parse_args()
     
-    final_topology = parse_topo_file(args.topo_file, args.racks_per_cab)
+    # Determine system name automatically if not provided
+    sys_name = args.system_name
+    if not sys_name:
+        sys_name = get_slurm_cluster_name()
+    
+    final_topology = parse_topo_file(args.topo_file, args.racks_per_cab, sys_name)
     
     with open(args.out, 'w') as f:
         json.dump(final_topology, f, indent=2)
         
-    print(f"Map generated with {sum(len(c['racks']) for c in final_topology['cabinets'])} switches.")
+    print(f"Map generated for '{sys_name}' with {sum(len(c['racks']) for c in final_topology['cabinets'])} switches.")
     print(f"Saved to {args.out}")

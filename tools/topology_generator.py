@@ -1,8 +1,14 @@
 import json
 import argparse
 
-def generate_topology(num_cabinets, racks_per_cab, nodes_per_rack, prefix, zero_pad, num_width, cpus_per_node, cores_per_cpu, output_file):
-    topology = {"cabinets": []}
+def generate_topology(num_cabinets, racks_per_cab, nodes_per_rack, prefix, zero_pad, num_width, cpus_per_node, cores_per_cpu, system_name, output_file):
+    # Restructured to include a root-level metadata object
+    topology = {
+        "metadata": {
+            "system_name": system_name
+        },
+        "cabinets": []
+    }
 
     # Standard physical spacing modifiers (adjust these to scale the 3D visualizer)
     cabinet_spacing_x = 100
@@ -52,12 +58,16 @@ def generate_topology(num_cabinets, racks_per_cab, nodes_per_rack, prefix, zero_
     with open(output_file, 'w') as f:
         json.dump(topology, f, indent=2)
 
-    print(f"Generated topology for {node_counter - 1} total nodes.")
+    print(f"Generated topology for '{system_name}' ({node_counter - 1} total nodes).")
     print(f"Hardware Specs: {cpus_per_node} CPUs/Node, {cores_per_cpu} Cores/CPU")
     print(f"Saved to {output_file}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate a 3D hardware map for MPI Profiler.")
+    
+    # System Metadata
+    parser.add_argument("--system_name", type=str, default="Generic Cluster", help="Global name of the system/cluster")
+    
     parser.add_argument("--cabinets", type=int, default=2, help="Number of physical cabinets")
     parser.add_argument("--racks", type=int, default=1, help="Number of racks per cabinet")
     parser.add_argument("--nodes", type=int, default=8, help="Number of nodes per rack")
@@ -81,7 +91,8 @@ if __name__ == "__main__":
         args.prefix, 
         args.zero_pad, 
         args.num_width, 
-        args.cpus,      # Passed to generator
-        args.cores,     # Passed to generator
+        args.cpus,      
+        args.cores,
+        args.system_name, # Passed to generator
         args.out
     )
