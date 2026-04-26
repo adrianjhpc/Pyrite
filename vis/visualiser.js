@@ -875,7 +875,7 @@ function renderActiveCommunications() {
         let eventsCaptured = 0;
  
         // 'right' is now the index of the last event occurring before/at currentTime.
-        // Step backwards to grab only the events within our time window!
+        // Step backwards to grab only the events within our time window.
         for (let i = right; i >= 0; i--) {
             if (timeline[i].time >= minTimeWindow) {
                 activeEvents.push(timeline[i]);
@@ -897,7 +897,7 @@ function renderActiveCommunications() {
         const recvMesh = rankMap.get(event.receiver);
 
         if (event.call === "MPI_WAIT" || event.call === "MPI_WAITALL") {
-            return; 
+            return; // Wait calls shouldn't force-extinguish or draw lines
         } else {
             // Ignite the ranks
             if (senderMesh) {
@@ -917,9 +917,7 @@ function renderActiveCommunications() {
         const rNode = rankToNodeGroup.get(event.receiver);
 
         if (sNode && rNode) {
-            // If the communications are inside a single node.
             if (sNode === rNode) {
-                // Draw intra-node rank-to-rank.
                 const sRankMesh = rankMap.get(event.sender);
                 const rRankMesh = rankMap.get(event.receiver);
 
@@ -930,16 +928,26 @@ function renderActiveCommunications() {
                     sRankMesh.getWorldPosition(startWorld);
                     rRankMesh.getWorldPosition(endWorld);
 
-                    // Pass event.time to generate an animated packet
-                    drawIntraNodeLine(startWorld, endWorld, event.call, event.time);
+                    // Pull points to the front surface of the 3D core 
+                    // BoxGeometry depth is stored in parameters.depth. Add 0.1 for a clean weld
+                    const sDepth = sRankMesh.geometry.parameters.depth || 1.0;
+                    const rDepth = rRankMesh.geometry.parameters.depth || 1.0;
+                    startWorld.z += (sDepth / 2) + 0.1;
+                    endWorld.z += (rDepth / 2) + 0.1;
+
+                    drawIntraNodeLine(startWorld, endWorld, event.call);
                 }
             } else {
-                // They are on different nodes.
                 if (cat.type === "collective") {
-                    // Collectives stay node-to-node
-                    drawInterNodeLine(sNode.position, rNode.position, event.call, event.sender, event.receiver, event.time);
+                    const startWorld = sNode.position.clone();
+                    const endWorld = rNode.position.clone();
+                    
+                    // Nodes are 10x10x10 boxes, so pull forward by 5.1 
+                    startWorld.z += 5.1;
+                    endWorld.z += 5.1;
+
+                    drawCommunicationLine(startWorld, endWorld, event.call, event.sender, event.receiver);
                 } else {
-                    // Point-to-Point routes directly core-to-core
                     const sRankMesh = rankMap.get(event.sender);
                     const rRankMesh = rankMap.get(event.receiver);
 
@@ -950,8 +958,13 @@ function renderActiveCommunications() {
                         sRankMesh.getWorldPosition(startWorld);
                         rRankMesh.getWorldPosition(endWorld);
 
-                        // Pass event.time to generate an animated packet
-                        drawInterNodeLine(startWorld, endWorld, event.call, event.sender, event.receiver, event.time);
+                        // Pull points to the front surface of the 3D core 
+                        const sDepth = sRankMesh.geometry.parameters.depth || 1.0;
+                        const rDepth = rRankMesh.geometry.parameters.depth || 1.0;
+                        startWorld.z += (sDepth / 2) + 0.1;
+                        endWorld.z += (rDepth / 2) + 0.1;
+
+                        drawCommunicationLine(startWorld, endWorld, event.call, event.sender, event.receiver);
                     }
                 }
             }
