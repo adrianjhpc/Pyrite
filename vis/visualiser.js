@@ -214,6 +214,9 @@ async function handleFileUpload(event) {
             alert("Please upload a packaged .mpix file for large traces.");
             return;
         }
+        currentLoadedChunkIndex = -1;
+        chunkLoadPromise = null;
+        chunkLoadIndexInFlight = -1;
         initDashboard();
     } catch (error) {
         console.error("Failed to unpack:", error);
@@ -314,12 +317,48 @@ async function ensureChunkLoadedForTime(time) {
 // ==========================================
 // TOPOLOGY & HARDWARE
 // ==========================================
+function disposeObjectTree(root) {
+  const geoms = new Set();
+  const mats = new Set();
+
+  root.traverse(obj => {
+    if (obj.geometry) geoms.add(obj.geometry);
+    if (obj.material) {
+      if (Array.isArray(obj.material)) obj.material.forEach(m => mats.add(m));
+      else mats.add(obj.material);
+    }
+  });
+
+  geoms.forEach(g => g.dispose());
+  mats.forEach(m => m.dispose());
+}
+
+function clearTopologyScene() {
+  nodeMap.forEach(group => {
+    disposeObjectTree(group);
+    scene.remove(group);
+  });
+  nodeMap.clear();
+  rankMap.clear();
+
+  // cabinet box, etc. (if kept outside node groups)
+  const toRemove = [];
+  scene.traverse(obj => {
+    if (obj.name === "cabinetBox") toRemove.push(obj);
+  });
+  toRemove.forEach(obj => {
+    disposeObjectTree(obj);
+    scene.remove(obj);
+  });
+
+  clearLines();
+}
+
 function initDashboard() {
     pausePlayback();
-    nodeMap.forEach(group => scene.remove(group));
-    nodeMap.clear();
-    rankMap.clear();
-    
+    clearTopologyScene();
+    rankToNodeGroup.clear();   
+ 
     // Clear old scene
     const objectsToRemove = [];
     scene.traverse(child => {
@@ -363,7 +402,10 @@ function initDashboard() {
     renderSpectrogram();
     initDynamicSpectrogram();
     
-    seekToTime(minTime);
+    void seekToTime(minTime).catch(err => {
+      console.error(err);
+      pausePlayback();
+    });
 }
 
 function buildRankIndex(topology) {
@@ -1100,7 +1142,8 @@ function updateDynamicSpectrogram(activeEvents) {
             if (count === 0) {
                 td.style.backgroundColor = '#161b22';
             } else {
-                const intensity = Math.max(0.15, count / globalMax);
+                const denom = globalMax > 0 ? globalMax : 1;
+                const intensity = Math.max(0.15, count / denom);
                 td.style.backgroundColor = `rgba(46, 160, 67, ${intensity})`; // Green Active
             }
         });
