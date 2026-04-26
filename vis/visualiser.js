@@ -818,7 +818,7 @@ function renderActiveCommunications() {
                 right = mid - 1;
             }
         }
-       
+        
         const MAX_VISIBLE_MESSAGES = 400;
         let eventsCaptured = 0;
  
@@ -836,6 +836,7 @@ function renderActiveCommunications() {
             }
         } 
     }
+
     activeEvents.forEach(event => {
         const cat = MPI_CATEGORIES[event.call] || DEFAULT_CATEGORY;
 
@@ -869,7 +870,7 @@ function renderActiveCommunications() {
         if (sNode && rNode) {
             // If the communications are inside a single node.
             if (sNode === rNode) {
-                // Draw rank-to-rank.
+                // Draw intra-node rank-to-rank.
                 const sRankMesh = rankMap.get(event.sender);
                 const rRankMesh = rankMap.get(event.receiver);
 
@@ -884,8 +885,25 @@ function renderActiveCommunications() {
                     drawIntraNodeLine(startWorld, endWorld, event.call);
                 }
             } else {
-                // They are on different nodes. Draw node-to-node across the network.
-                drawCommunicationLine(sNode.position, rNode.position, event.call, event.sender, event.receiver);
+                // They are on different nodes.
+                if (cat.type === "collective") {
+                    // Collectives stay node-to-node to avoid massive visual clutter
+                    drawCommunicationLine(sNode.position, rNode.position, event.call, event.sender, event.receiver);
+                } else {
+                    // Point-to-Point routes directly core-to-core across the network!
+                    const sRankMesh = rankMap.get(event.sender);
+                    const rRankMesh = rankMap.get(event.receiver);
+
+                    if (sRankMesh && rRankMesh) {
+                        const startWorld = new THREE.Vector3();
+                        const endWorld = new THREE.Vector3();
+                        
+                        sRankMesh.getWorldPosition(startWorld);
+                        rRankMesh.getWorldPosition(endWorld);
+
+                        drawCommunicationLine(startWorld, endWorld, event.call, event.sender, event.receiver);
+                    }
+                }
             }
         }
     });
