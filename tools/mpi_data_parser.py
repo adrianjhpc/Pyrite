@@ -83,7 +83,7 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
     large_size = struct.calcsize(p2p_large_fmt)
 
     data = {
-        "metadata": {"total_ranks": 0},
+        "metadata": {"total_ranks": 0, "date": "" , "program": "unknown"},
         "topology": [],
         "timeline": [],
         "statistics": {}
@@ -98,12 +98,25 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
     }
 
     with open(mpic_filepath, 'rb') as f:
-        my_size_bytes = f.read(4)
-        if not my_size_bytes:
-            print("Error: Empty file.")
+        # i = integer (4 bytes), 64s = string (64 bytes), 256s = string (256 bytes)
+        global_header_fmt = '=i 64s 1024s' 
+        global_header_size = struct.calcsize(global_header_fmt)
+        
+        header_bytes = f.read(global_header_size)
+        if not header_bytes or len(header_bytes) < global_header_size:
+            print("Error: Empty or corrupted file header.")
             sys.exit(1)
         
-        data["metadata"]["total_ranks"] = struct.unpack('=i', my_size_bytes)[0]
+        total_ranks, raw_date, raw_prog = struct.unpack(global_header_fmt, header_bytes)
+        
+        # Clean up the C-strings (remove null bytes and decode)
+        run_date = raw_date.decode('utf-8', errors='ignore').rstrip('\x00')
+        prog_name = raw_prog.decode('utf-8', errors='ignore').rstrip('\x00')
+        
+        # Assign to our metadata dictionary
+        data["metadata"]["total_ranks"] = total_ranks
+        data["metadata"]["date"] = run_date
+        data["metadata"]["program"] = prog_name
 
         # Read Process Information
         for _ in range(data["metadata"]["total_ranks"]):

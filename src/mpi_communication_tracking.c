@@ -579,10 +579,17 @@ int gather_process_information(){
 int write_global_information(){
   int i;
   assert(my_rank == 0);
+ 
+  // Use fixed-size buffers padded with null-terminators for safe binary parsing
+  char fixed_datetime[DATETIME_LENGTH] = {0};
+  char fixed_programname[STRING_LENGTH] = {0};
   
+  strncpy(fixed_datetime, datetime, 63);
+  strncpy(fixed_programname, programname, 255);
+ 
   fwrite(&my_size, sizeof(int), 1, global_file);
-  fwrite(&datetime, sizeof(datetime), 1, global_file);
-  fwrite(&programname, sizeof(char)*strlen(programname), 1, global_file);
+  fwrite(&fixed_datetime, sizeof(datetime), 1, global_file);
+  fwrite(&fixed_programname, sizeof(programname), 1, global_file);
 
   for(i=0; i<my_size; i++){
     fwrite(&processes[i], sizeof(struct process_info), 1, global_file);
