@@ -2,6 +2,7 @@
 #define MPI_COMMUNICATION_TRACKING_H
 
 #define STRING_LENGTH 1024
+#define DATETIME_LENGTH 64
 #define MPI_SEND_TYPE 13
 #define MPI_RECV_TYPE 14
 #define MPI_BSEND_TYPE 15
@@ -39,6 +40,7 @@ int process_data_files();
 int close_global_file();
 int get_program_name();
 int get_process_id();
+int get_datetime();
 int get_local_filename(char *filename, char *hostname, int proc_id);
 int get_data_limit();
 

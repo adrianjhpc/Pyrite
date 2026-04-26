@@ -34,6 +34,7 @@ int current_id;
 pid_t process_id = -1;
 char hostname[STRING_LENGTH];
 char programname[STRING_LENGTH];
+char datetime[DATETIME_LENGTH];
 FILE *global_file;
 FILE *small_output_file;
 FILE *large_output_file;
@@ -88,6 +89,8 @@ int MPI_Init_thread(int *argc, char ***argv, int required, int *provided) {
 
   gethostname(hostname, STRING_LENGTH);
 
+  get_datetime();
+  
   small_head = (small_node_t *) malloc(sizeof(small_node_t));
   if(small_head == NULL){
     printf("Error creating the data structure for storing message data\n");
@@ -165,6 +168,8 @@ int MPI_Init(int *argc, char ***argv){
   get_process_id();
 
   gethostname(hostname, STRING_LENGTH);
+
+  get_datetime();
 
   small_head = (small_node_t *) malloc(sizeof(small_node_t));
   if(small_head == NULL){
@@ -480,8 +485,17 @@ int get_program_name(){
       strcpy(programname, oldname);
     }
   } else {
-    strcpy(programname, "unknown_program");
+    strcpy(programname, "unknown program\0");
   }
+
+  return 0;
+}
+
+int get_datetime(){
+
+  time_t t = time(NULL);
+  struct tm *tm = localtime(&t);
+  size_t ret = strftime(datetime, sizeof(datetime), "%c", tm);
 
   return 0;
 }
@@ -505,6 +519,8 @@ int gather_process_information(){
   int block_lengths[5]; 
   MPI_Datatype block_types[5];
   MPI_Aint block_displacements[5];
+  time_t t = time(NULL);
+  struct tm *tm = localtime(&t);
 
   get_processor_and_core(&chip, &core);
 
@@ -512,6 +528,7 @@ int gather_process_information(){
   my_process.process_id = process_id;
   my_process.core = core;
   my_process.chip = chip;
+
   memset(my_process.hostname,0,sizeof(my_process.hostname));
   strcpy(my_process.hostname, hostname);
 
@@ -564,6 +581,8 @@ int write_global_information(){
   assert(my_rank == 0);
   
   fwrite(&my_size, sizeof(int), 1, global_file);
+  fwrite(&datetime, sizeof(datetime), 1, global_file);
+  fwrite(&programname, sizeof(char)*strlen(programname), 1, global_file);
 
   for(i=0; i<my_size; i++){
     fwrite(&processes[i], sizeof(struct process_info), 1, global_file);
