@@ -98,13 +98,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
 window.addEventListener("resize", () => {
   const container = document.getElementById("visCanvas");
-  if (!container) return;
+  if (!container || !camera || !renderer) return;
 
-  camera.aspect = container.clientWidth / container.clientHeight;
+  const w = container.clientWidth;
+  const h = container.clientHeight;
+  if (w <= 0 || h <= 0) return;
+
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setSize(w, h);
 });
-
 
 function initThreeJS() {
     const container = document.getElementById("visCanvas");
@@ -125,16 +128,18 @@ function initThreeJS() {
 
     controls.listenToKeyEvents(window);
     controls.keyPanSpeed = 20.0; // Adjust how fast the camera moves
-    // Map panning to W, A, S, D (or keep default Arrow Keys)
-    controls.keys = {
-        LEFT: 'KeyA',
-        UP: 'KeyW',
-        RIGHT: 'KeyD',
-        BOTTOM: 'KeyS'
-    }; 
+    // Map panning to W, A, S, D
+    //controls.keys = {
+    //    LEFT: 'KeyA',
+    //    UP: 'KeyW',
+    //    RIGHT: 'KeyD',
+    //    BOTTOM: 'KeyS'
+    //}; 
 
     // Listen for clicks on the 3D canvas
     renderer.domElement.addEventListener('click', onCanvasClick, false);
+    
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
     const grid = new THREE.GridHelper(1000, 50, 0x30363d, 0x21262d);
     grid.position.y = -10;
@@ -322,10 +327,7 @@ async function ensureChunkLoadedForTime(time) {
 // ==========================================
 // TOPOLOGY & HARDWARE
 // ==========================================
-function disposeObjectTree(root) {
-  const geoms = new Set();
-  const mats = new Set();
-
+function collectDisposableResources(root, geoms, mats) {
   root.traverse(obj => {
     if (obj.geometry) geoms.add(obj.geometry);
     if (obj.material) {
@@ -333,30 +335,31 @@ function disposeObjectTree(root) {
       else mats.add(obj.material);
     }
   });
-
-  geoms.forEach(g => g.dispose());
-  mats.forEach(m => m.dispose());
 }
 
 function clearTopologyScene() {
+  const geoms = new Set();
+  const mats = new Set();
+
   nodeMap.forEach(group => {
-    disposeObjectTree(group);
+    collectDisposableResources(group, geoms, mats);
     scene.remove(group);
   });
   nodeMap.clear();
   rankMap.clear();
 
-  // cabinet box, etc. (if kept outside node groups)
+  // Remove cabinetBox
   const toRemove = [];
-  scene.traverse(obj => {
-    if (obj.name === "cabinetBox") toRemove.push(obj);
-  });
+  scene.traverse(obj => { if (obj.name === "cabinetBox") toRemove.push(obj); });
   toRemove.forEach(obj => {
-    disposeObjectTree(obj);
+    collectDisposableResources(obj, geoms, mats);
     scene.remove(obj);
   });
 
   clearLines();
+
+  geoms.forEach(g => g.dispose());
+  mats.forEach(m => m.dispose());
 }
 
 function initDashboard() {
@@ -384,7 +387,9 @@ function initDashboard() {
     buildRankIndex(parsedData.topology)
     renderSpectrogram();
     initDynamicSpectrogram();
-    
+   
+    initLegend();
+ 
     void seekToTime(minTime).catch(err => {
       console.error(err);
       pausePlayback();
@@ -404,7 +409,7 @@ function buildRankIndex(topology) {
 function buildHardwareTopology(topology) {
     const nodesMap = {};
 
-    // 1. PRE-FILL: Read Blueprint (Handles both flat lists and nested Cabinet structures)
+    // Read topology blueprint (Handles both flat lists and nested Cabinet structures)
     if (parsedData.hardware_blueprint) {
         const bp = parsedData.hardware_blueprint;
 
@@ -799,7 +804,9 @@ async function playLoop(timestamp) {
 function renderActiveCommunications() {
     clearLines();
 
-    const windowSize = 0.05 * Math.pow(10, parseFloat(document.getElementById("speedSlider").value));
+    const raw = parseFloat(document.getElementById("speedSlider").value);
+    const windowSize = Math.min(0.2, 0.05 * Math.pow(10, raw));
+
     const minTimeWindow = currentTime - windowSize;
     const timeline = parsedData.timeline;
     const activeEvents = [];
@@ -1000,6 +1007,86 @@ function clearLines() {
     junctionPoints = [];
 }
 
+// ======
+// LEGEND
+// ======
+function initLegend() {
+    // Prevent duplicate legends if the user loads multiple profiles
+    if (document.getElementById("mpiLegend")) return;
+
+    // Create the floating panel
+    const legendDiv = document.createElement("div");
+    legendDiv.id = "mpiLegend";
+    legendDiv.style.position = "absolute";
+    legendDiv.style.bottom = "20px";
+    legendDiv.style.right = "20px";
+    legendDiv.style.backgroundColor = "rgba(22, 27, 34, 0.85)";
+    legendDiv.style.border = "1px solid #30363d";
+    legendDiv.style.borderRadius = "8px";
+    legendDiv.style.padding = "12px 18px";
+    legendDiv.style.color = "#c9d1d9";
+    legendDiv.style.fontFamily = "'Fira Code', monospace, sans-serif";
+    legendDiv.style.fontSize = "0.8rem";
+    legendDiv.style.zIndex = "1000";
+    legendDiv.style.pointerEvents = "none"; // Lets user click/drag the 3D camera *through* the legend
+    legendDiv.style.boxShadow = "0 4px 12px rgba(0,0,0,0.5)";
+    legendDiv.style.backdropFilter = "blur(4px)";
+
+    const title = document.createElement("div");
+    title.innerHTML = "<strong>COMMUNICATION TYPES</strong>";
+    title.style.marginBottom = "10px";
+    title.style.borderBottom = "1px solid #30363d";
+    title.style.paddingBottom = "6px";
+    title.style.color = "#8b949e";
+    legendDiv.appendChild(title);
+
+    // Group the dictionary by category type to avoid drawing 20 duplicate blue boxes
+    const uniqueTypes = {};
+    Object.values(MPI_CATEGORIES).forEach(cat => {
+        if (!uniqueTypes[cat.type]) uniqueTypes[cat.type] = cat.color;
+    });
+
+    // Clean up the internal code names for the UI
+    const formatName = (str) => {
+        if (str === "p2p_block") return "P2P Blocking";
+        if (str === "p2p_nonblock") return "P2P Non-Blocking";
+        if (str === "state") return "Wait / Sync States";
+        if (str === "collective") return "Collectives";
+        return str;
+    };
+
+    // Draw the color swatches
+    Object.entries(uniqueTypes).forEach(([type, hexColor]) => {
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.alignItems = "center";
+        row.style.marginBottom = "6px";
+
+        const colorBox = document.createElement("div");
+        colorBox.style.width = "12px";
+        colorBox.style.height = "12px";
+        colorBox.style.marginRight = "10px";
+        colorBox.style.borderRadius = "2px";
+        // Convert the Three.js hex number back into a standard CSS #hex string
+        colorBox.style.backgroundColor = '#' + hexColor.toString(16).padStart(6, '0');
+        colorBox.style.boxShadow = `0 0 5px ${colorBox.style.backgroundColor}`; // Subtle glow
+
+        const label = document.createElement("span");
+        label.textContent = formatName(type);
+
+        row.appendChild(colorBox);
+        row.appendChild(label);
+        legendDiv.appendChild(row);
+    });
+
+    // Mount it directly over the 3D Canvas
+    const container = document.getElementById("visCanvas");
+    if (container) {
+        container.style.position = "relative"; // Required to anchor the absolute legend
+        container.appendChild(legendDiv);
+    }
+}
+
 // ==========================================
 // SPECTROGRAM DASHBOARDS
 // ==========================================
@@ -1101,10 +1188,14 @@ function initDynamicSpectrogram() {
 }
 
 function updateDynamicSpectrogram(activeEvents) {
-  if (!parsedData || !dynamicCells || !activeEvents) return;
-    
+    if (!parsedData || !parsedData.statistics || !dynamicCells || !activeEvents) return;
+
     const stats = parsedData.statistics;
     const calls = Object.keys(stats);
+    if (calls.length === 0) return;
+
+    const first = stats[calls[0]];
+    if (!first) return;  
     const binsTemplate = Object.keys(stats[calls[0]]);
     let currentCounts = {};
     calls.forEach(c => {
