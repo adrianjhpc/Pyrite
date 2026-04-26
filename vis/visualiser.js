@@ -933,7 +933,7 @@ function renderActiveCommunications() {
                 // They are on different nodes.
                 if (cat.type === "collective") {
                     // Collectives stay node-to-node
-                    drawCommunicationLine(sNode.position, rNode.position, event.call, event.sender, event.receiver, event.time);
+                    drawInterNodeLine(sNode.position, rNode.position, event.call, event.sender, event.receiver, event.time);
                 } else {
                     // Point-to-Point routes directly core-to-core
                     const sRankMesh = rankMap.get(event.sender);
@@ -947,7 +947,7 @@ function renderActiveCommunications() {
                         rRankMesh.getWorldPosition(endWorld);
 
                         // Pass event.time to generate an animated packet
-                        drawCommunicationLine(startWorld, endWorld, event.call, event.sender, event.receiver, event.time);
+                        drawInterNodeLine(startWorld, endWorld, event.call, event.sender, event.receiver, event.time);
                     }
                 }
             }
@@ -963,31 +963,29 @@ function drawIntraNodeLine(startPos, endPos, callName) {
     const midPoint = startPos.clone().lerp(endPos, 0.5);
     const distance = startPos.distanceTo(endPos);
 
-    const bowDistance = Math.max(distance * 0.6, 3.0); 
+    // Bow straight out towards the user so the line doesn't cut through the cores
+    const bowDistance = Math.max(distance * 0.4, 1.0); 
     midPoint.z += bowDistance;
 
     const curve = new THREE.QuadraticBezierCurve3(startPos, midPoint, endPos);
     
-    // Parameters: path, tubularSegments, radius, radialSegments, closed
-    // We use low segments (12 and 6) to keep memory optimised
-    const geometry = new THREE.TubeGeometry(curve, 12, 0.15, 6, false);
+    const geometry = new THREE.TubeGeometry(curve, 12, 0.08, 6, false);
 
-    // Use the solid, fully opaque junction material so it pops
+    // Use the opaque Mesh material
     const material = sharedMaterials[callName + "_junction"] || sharedMaterials["default_junction"];
 
-    // Because it's a TubeGeometry, it's a mesh not a line 
     const tube = new THREE.Mesh(geometry, material);
     tube.name = "mpiLine";
     scene.add(tube);
     activeLines.push(tube);
 
-    // We add the junction spheres to cap the ends cleanly into the silicon
-    const points = curve.getPoints(10);
+    // Add tiny junction points at the core boundaries
+    const points = curve.getPoints(10); 
     createJunctionPoint(points[0], callName);
     createJunctionPoint(points[points.length - 1], callName);
 }
 
-function drawCommunicationLine(startPos, endPos, callName, sender, receiver) {
+function drawInterNodeLine(startPos, endPos, callName, sender, receiver) {
     const cat = MPI_CATEGORIES[callName] || DEFAULT_CATEGORY;
 
     const midPoint = startPos.clone().lerp(endPos, 0.5);
@@ -1007,16 +1005,20 @@ function drawCommunicationLine(startPos, endPos, callName, sender, receiver) {
     }
 
     const curve = new THREE.QuadraticBezierCurve3(startPos, midPoint, endPos);
+    
+    // We use 20 segments here to keep the long arcs smooth, with the same 0.08 radius
+    const geometry = new THREE.TubeGeometry(curve, 20, 0.08, 6, false);
+
+    // Because we are using a Tube (which is a Mesh), we must use the junction material 
+    const material = sharedMaterials[callName + "_junction"] || sharedMaterials["default_junction"];
+
+    const tube = new THREE.Mesh(geometry, material);
+    tube.name = "mpiLine";
+    scene.add(tube);
+    activeLines.push(tube);
+
+    // Anchor strictly to the start and end of the curve
     const points = curve.getPoints(20); 
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-
-    const material = sharedMaterials[callName + "_line"] || sharedMaterials["default_line"];
-
-    const line = new THREE.Line(geometry, material);
-    line.name = "mpiLine";
-    scene.add(line);
-    activeLines.push(line);
-
     createJunctionPoint(points[0], callName);
     createJunctionPoint(points[points.length - 1], callName);
 }
@@ -1077,8 +1079,15 @@ function renderMetadata() {
     
     // Calculate scale from topology
     const totalRanks = parsedData.topology ? parsedData.topology.length : 0;
-    const totalNodes = Object.keys(parsedData.hardware_blueprint ? parsedData.hardware_blueprint : {}).length;
     
+    const activeNodes = new Set();
+    if (parsedData.topology) {
+        parsedData.topology.forEach(t => {
+            if (t.hostname) activeNodes.add(t.hostname);
+        });
+    }
+    const totalActiveNodes = activeNodes.size;
+
     container.innerHTML = `
         <div style="font-size: 0.75rem; color: #8b949e; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px;">
             Run Metadata
@@ -1086,7 +1095,7 @@ function renderMetadata() {
         <div style="color: #c9d1d9; font-family: 'Fira Code', monospace; font-size: 0.85rem; line-height: 1.6;">
             <div><span style="color: #58a6ff;">Program:</span> ${programName}</div>
             <div><span style="color: #58a6ff;">Date:</span> ${runDate}</div>
-            <div><span style="color: #58a6ff;">Scale:</span> ${totalRanks} Ranks / ${totalNodes} Nodes</div>
+            <div><span style="color: #58a6ff;">Scale:</span> ${totalRanks} Ranks across ${totalActiveNodes} Nodes</div>
         </div>
     `;
 }
