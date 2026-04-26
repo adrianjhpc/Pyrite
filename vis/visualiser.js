@@ -653,14 +653,22 @@ function togglePlayback() {
     }
 }
 
-async function seekToTime(time) {
+async function seekToTime(time, isPlayingLoop = false) {
     currentTime = time;
     document.getElementById("timeSlider").value = currentTime;
     document.getElementById("currentTimeLabel").textContent = currentTime.toFixed(3);
     
     await ensureChunkLoadedForTime(currentTime);
-    renderActiveCommunications();
-    updateDynamicSpectrogram(currentTime);
+    
+    // Grab the active events returned by our new Binary Search
+    const activeEvents = renderActiveCommunications();
+    
+    // Only update the heavy dashboard here if the user is manually scrubbing the slider!
+    if (!isPlayingLoop) {
+        updateDynamicSpectrogram(activeEvents);
+    }
+    
+    return activeEvents;
 }
 
 async function playLoop(timestamp) {
@@ -674,19 +682,22 @@ async function playLoop(timestamp) {
     const speed = Math.pow(10, parseFloat(document.getElementById("speedSlider").value));
     let nextTime = currentTime + (cappedDelta * timeMultiplier * speed);
 
-    if (timestamp - lastDynUpdate > 100) {
-        updateDynamicSpectrogram(nextTime);
-        lastDynUpdate = timestamp;
-    }
-
     if (nextTime >= maxTime) {
-        await seekToTime(maxTime);
+        await seekToTime(maxTime, false);
         pausePlayback();
         isProcessingFrame = false;
         return;
     }
 
-    await seekToTime(nextTime);
+    // Pass 'true' so seekToTime doesn't trigger the dashboard
+    const activeEvents = await seekToTime(nextTime, true);
+
+    // Safely throttle the dashboard updates to run exactly every 100ms
+    if (timestamp - lastDynUpdate > 100) {
+        updateDynamicSpectrogram(activeEvents);
+        lastDynUpdate = timestamp;
+    }
+
     isProcessingFrame = false;
     
     if (isPlaying) {
@@ -698,11 +709,35 @@ function renderActiveCommunications() {
     clearLines();
 
     const windowSize = 0.05 * Math.pow(10, parseFloat(document.getElementById("speedSlider").value));
-    
-    const activeEvents = parsedData.timeline.filter(e => 
-        e.time >= (currentTime - windowSize) && e.time <= currentTime
-    );
+    const minTimeWindow = currentTime - windowSize;
+    const timeline = parsedData.timeline;
+    const activeEvents = [];
 
+    // --- NEW: Binary Search ($O(log N)$ instead of $O(N)$ filter) ---
+    if (timeline && timeline.length > 0) {
+        let left = 0;
+        let right = timeline.length - 1;
+        let mid = 0;
+        
+        while (left <= right) {
+            mid = Math.floor((left + right) / 2);
+            if (timeline[mid].time <= currentTime) {
+                left = mid + 1;
+            } else {
+                right = mid - 1;
+            }
+        }
+        
+        // 'right' is now the index of the last event occurring before/at currentTime.
+        // Step backwards to grab only the events within our time window!
+        for (let i = right; i >= 0; i--) {
+            if (timeline[i].time >= minTimeWindow) {
+                activeEvents.push(timeline[i]);
+            } else {
+                break; // Stop immediately once we fall out of the time window
+            }
+        }
+    }
     activeEvents.forEach(event => {
         const cat = MPI_CATEGORIES[event.call] || DEFAULT_CATEGORY;
 
@@ -945,10 +980,9 @@ function initDynamicSpectrogram() {
     container.appendChild(table);
 }
 
-function updateDynamicSpectrogram(targetTime) {
-    if (!parsedData || !dynamicCells) return;
+function updateDynamicSpectrogram(activeEvents) {
+  if (!parsedData || !dynamicCells || !activeEvents) return;
     
-    // Reset Counts
     const stats = parsedData.statistics;
     const calls = Object.keys(stats);
     const binsTemplate = Object.keys(stats[calls[0]]);
@@ -958,10 +992,9 @@ function updateDynamicSpectrogram(targetTime) {
         binsTemplate.forEach(b => currentCounts[c][b] = 0);
     });
 
-    // Tally up to targetTime using only the currently loaded chunk
-    for (let i = 0; i < parsedData.timeline.length; i++) {
-        const event = parsedData.timeline[i];
-        if (event.time > targetTime) break;
+    // --- NEW: Only tally the specific events active in the 3D scene right now ---
+    for (let i = 0; i < activeEvents.length; i++) {
+        const event = activeEvents[i];
         const call = event.call;
         if (currentCounts[call] !== undefined) {
             const b = event.bytes || 0;
@@ -973,7 +1006,6 @@ function updateDynamicSpectrogram(targetTime) {
             else currentCounts[call]["> 16MB"]++;
         }
     }
-
     let globalMax = 0;
     calls.forEach(c => binsTemplate.forEach(b => { if (stats[c][b] > globalMax) globalMax = stats[c][b]; }));
 
