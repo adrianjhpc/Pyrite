@@ -27,14 +27,29 @@ def load_hardware_map(filepath):
     lookup = {}
     for cab in hw.get("cabinets", []):
         for rack in cab.get("racks", []):
-            for node in rack.get("nodes", []):
-                lookup[node["hostname"]] = {
-                    "cab_id": cab["id"],
-                    "rack_id": rack["id"],
-                    "x": cab["x"] + rack["x_offset"],
-                    "y": node["slot"] * 12, 
-                    "z": cab["z"] + rack["z_offset"]
-                }
+            # Check if the Rack uses blades
+            if "blades" in rack:
+                for blade in rack["blades"]:
+                    for node in blade.get("nodes", []):
+                        lookup[node["hostname"]] = {
+                            "cab_id": cab["id"],
+                            "rack_id": rack["id"],
+                            "blade_id": blade["id"],
+                            # Nodes sit side-by-side (X), Blades stack vertically (Y)
+                            "x": cab["x"] + rack.get("x_offset", 0) + node.get("x_offset", node.get("slot", 0) * 12),
+                            "y": blade.get("y_offset", 0), 
+                            "z": cab["z"] + rack.get("z_offset", 0)
+                        }
+            else:
+                # Support for node-only racks
+                for node in rack.get("nodes", []):
+                    lookup[node["hostname"]] = {
+                        "cab_id": cab["id"],
+                        "rack_id": rack["id"],
+                        "x": cab["x"] + rack.get("x_offset", 0),
+                        "y": node.get("slot", 0) * 15,
+                        "z": cab["z"] + rack.get("z_offset", 0)
+                    }
     return lookup
 
 def print_summary_table(stats):

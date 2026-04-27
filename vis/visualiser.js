@@ -425,11 +425,10 @@ function buildRankIndex(topology) {
 function buildHardwareTopology(topology) {
     const nodesMap = {};
 
-    // Read topology blueprint (Handles both flat lists and nested Cabinet structures)
+    // Read topology blueprint (Handles Flat, Rack-based, and Blade-based structures)
     if (parsedData.hardware_blueprint) {
         const bp = parsedData.hardware_blueprint;
 
-        // Check if we are using the advanced Cabinet -> Rack -> Node structure
         if (bp.cabinets && Array.isArray(bp.cabinets)) {
             bp.cabinets.forEach(cabinet => {
                 const cabX = cabinet.x || 0;
@@ -437,23 +436,39 @@ function buildHardwareTopology(topology) {
 
                 if (cabinet.racks && Array.isArray(cabinet.racks)) {
                     cabinet.racks.forEach(rack => {
-                        // Calculate absolute X/Z based on cabinet + rack offsets
-                        const absoluteX = cabX + (rack.x_offset || 0);
-                        const absoluteZ = cabZ + (rack.z_offset || 0);
+                        const rackX = cabX + (rack.x_offset || 0);
+                        const rackZ = cabZ + (rack.z_offset || 0);
 
-                        if (rack.nodes && Array.isArray(rack.nodes)) {
+                        // Blade-based architecture
+                        if (rack.blades && Array.isArray(rack.blades)) {
+                            rack.blades.forEach(blade => {
+                                const bladeY = blade.y_offset || 0;
+
+                                if (blade.nodes && Array.isArray(blade.nodes)) {
+                                    blade.nodes.forEach(node => {
+                                        const host = node.hostname;
+                                        // Nodes sit side-by-side in the blade (X offset)
+                                        const absoluteX = rackX + (node.x_offset || (node.slot * 12));
+                                        // The blade dictates the vertical height
+                                        const absoluteY = bladeY;
+                                        
+                                        nodesMap[host] = { 
+                                            ranks: [], x: absoluteX, y: absoluteY, z: rackZ,
+                                            cpus: node.cpus || 1, coresPerCpu: node.cores_per_cpu || 1 
+                                        };
+                                    });
+                                }
+                            });
+                        } 
+                        // Node/rack based architecture
+                        else if (rack.nodes && Array.isArray(rack.nodes)) {
                             rack.nodes.forEach(node => {
                                 const host = node.hostname;
-                                // Convert the hardware 'slot' into a physical vertical Y coordinate
                                 const absoluteY = (node.slot !== undefined ? node.slot : 0) * 15;
 
                                 nodesMap[host] = { 
-                                    ranks: [], 
-                                    x: absoluteX, 
-                                    y: absoluteY, 
-                                    z: absoluteZ,
-                                    cpus: node.cpus || 1,             
-                                    coresPerCpu: node.cores_per_cpu || 1 
+                                    ranks: [], x: rackX, y: absoluteY, z: rackZ,
+                                    cpus: node.cpus || 1, coresPerCpu: node.cores_per_cpu || 1 
                                 };
                             });
                         }
@@ -461,18 +476,13 @@ function buildHardwareTopology(topology) {
                 }
             });
         } else {
-            // Fallback for flat dictionary blueprints
+            // Fallback for completely flat dictionary blueprints
             Object.keys(bp).forEach(host => {
                 const node = bp[host];
-                // Ignore the "cabinets" key if it accidentally bled into a flat map
-                if (host !== "cabinets") { 
+                if (host !== "cabinets" && host !== "metadata") { 
                     nodesMap[host] = { 
-                        ranks: [], 
-                        x: node.x || 0, 
-                        y: node.y || 0, 
-                        z: node.z || 0,
-                        cpus: node.cpus || 1,             
-                        coresPerCpu: node.cores_per_cpu || 1 
+                        ranks: [], x: node.x || 0, y: node.y || 0, z: node.z || 0,
+                        cpus: node.cpus || 1, coresPerCpu: node.cores_per_cpu || 1 
                     };
                 }
             });
@@ -1301,26 +1311,26 @@ function initLegend() {
         return str;
     };
 
-    // Draw the color swatches
+    // Draw the colour swatches
     Object.entries(uniqueTypes).forEach(([type, hexColor]) => {
         const row = document.createElement("div");
         row.style.display = "flex";
         row.style.alignItems = "center";
         row.style.marginBottom = "6px";
 
-        const colorBox = document.createElement("div");
-        colorBox.style.width = "12px";
-        colorBox.style.height = "12px";
-        colorBox.style.marginRight = "10px";
-        colorBox.style.borderRadius = "2px";
+        const colourBox = document.createElement("div");
+        colourBox.style.width = "12px";
+        colourBox.style.height = "12px";
+        colourBox.style.marginRight = "10px";
+        colourBox.style.borderRadius = "2px";
         // Convert the Three.js hex number back into a standard CSS #hex string
-        colorBox.style.backgroundColor = '#' + hexColor.toString(16).padStart(6, '0');
-        colorBox.style.boxShadow = `0 0 5px ${colorBox.style.backgroundColor}`; // Subtle glow
+        colourBox.style.backgroundColor = '#' + hexColor.toString(16).padStart(6, '0');
+        colourBox.style.boxShadow = `0 0 5px ${colourBox.style.backgroundColor}`; // Subtle glow
 
         const label = document.createElement("span");
         label.textContent = formatName(type);
 
-        row.appendChild(colorBox);
+        row.appendChild(colourBox);
         row.appendChild(label);
         legendDiv.appendChild(row);
     });

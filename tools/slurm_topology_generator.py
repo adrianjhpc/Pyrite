@@ -37,7 +37,7 @@ def get_slurm_cluster_name():
     """Attempts to query Slurm locally for the cluster name."""
     try:
         # Run 'scontrol show config' and capture the output
-        result = subprocess.run(['scontrol', 'show', 'config'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        result = subprocess.run(['scontrol', 'show', 'config'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, check=True)
         for line in result.stdout.split('\n'):
             if 'ClusterName' in line:
                 # Output looks like: "ClusterName             = my_cluster"
@@ -76,7 +76,6 @@ def parse_topo_file(filepath, racks_per_cabinet, system_name):
     return build_json_topology(switches, racks_per_cabinet, system_name)
 
 def build_json_topology(switches, racks_per_cabinet, system_name):
-    # --- NEW: Restructured to include a root-level metadata object ---
     topology = {
         "metadata": {
             "system_name": system_name
@@ -85,8 +84,8 @@ def build_json_topology(switches, racks_per_cabinet, system_name):
     }
     
     # 3D Visualizer spacing settings
-    cabinet_spacing_x = 100
-    rack_spacing_x = 20
+    cabinet_spacing_x = 75
+    rack_spacing_x = 15
     
     cab_idx = 0
     rack_idx = 0
