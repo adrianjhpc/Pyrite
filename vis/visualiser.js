@@ -125,6 +125,29 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     document.getElementById("btn-rec-ui-stop")?.addEventListener("click", stopUIRecording);
+
+    // Camera presets
+    document.getElementById("btn-view-iso")?.addEventListener("click", () => viewPreset("iso"));
+    document.getElementById("btn-view-top")?.addEventListener("click", () => viewPreset("top"));
+    document.getElementById("btn-view-front")?.addEventListener("click", () => viewPreset("front"));
+    document.getElementById("btn-view-side")?.addEventListener("click", () => viewPreset("side"));
+    document.getElementById("btn-view-reset")?.addEventListener("click", resetView);
+
+    // Follow selection
+    document.getElementById("chk-follow")?.addEventListener("change", (e) => {
+      setFollowEnabled(e.target.checked);
+    });
+
+    // Layout switch
+    document.getElementById("layoutMode")?.addEventListener("change", (e) => {
+      applyLayout(e.target.value);
+    });
+
+    // Saved views
+    initSavedViewsUI();
+    document.getElementById("btn-view-save")?.addEventListener("click", saveCurrentView);
+    document.getElementById("btn-view-load")?.addEventListener("click", loadSelectedView);
+    document.getElementById("btn-view-del")?.addEventListener("click", deleteSelectedView);
 });
 
 window.addEventListener("resize", () => {
@@ -189,19 +212,21 @@ function initThreeJS() {
 
 function animateThreeJS() {
     requestAnimationFrame(animateThreeJS);
-    controls.update();
-    
-    // Only decay the emissive glow if the timeline is actively playing!
+
+    if (isFollowEnabled) {
+        updateFollowCamera(); // includes controls.update()
+    } else {
+        controls.update();
+    }
+
     if (isPlaying) {
         rankMap.forEach(mesh => {
             if (mesh.material.emissiveIntensity > 0) {
-                mesh.material.emissiveIntensity -= 0.02; // Fade out over ~50 frames
+                mesh.material.emissiveIntensity -= 0.02;
                 if (mesh.material.emissiveIntensity < 0) mesh.material.emissiveIntensity = 0;
             }
         });
     }
-
-    updateFollowCamera();
 
     renderer.render(scene, camera);
 }
@@ -384,6 +409,20 @@ function clearTopologyScene() {
 
   geoms.forEach(g => g.dispose());
   mats.forEach(m => m.dispose());
+
+  nodeOriginalPos.clear();
+setSelectedObject(null);
+setFollowEnabled(false);
+
+const chk = document.getElementById("chk-follow");
+if (chk) chk.checked = false;
+
+const layoutSel = document.getElementById("layoutMode");
+if (layoutSel) layoutSel.value = "blueprint";
+
+currentLayoutMode = "blueprint";
+defaultCameraPose = null;
+
 }
 
 function initDashboard() {
@@ -587,6 +626,171 @@ function updateFollowCamera() {
   controls.update();
 }
 
+function animateNodePositions(targetPositions, duration = 650) {
+  const start = performance.now();
+  const startPositions = new Map();
+
+  nodeMap.forEach((group, hostname) => {
+    startPositions.set(hostname, group.position.clone());
+  });
+
+  function step(t) {
+    const u = Math.min(1, (t - start) / duration);
+    const ease = 1 - Math.pow(1 - u, 3);
+
+    nodeMap.forEach((group, hostname) => {
+      const from = startPositions.get(hostname);
+      const to = targetPositions.get(hostname);
+      if (!from || !to) return;
+      group.position.lerpVectors(from, to, ease);
+    });
+
+    if (u < 1) requestAnimationFrame(step);
+  }
+
+  requestAnimationFrame(step);
+}
+
+function applyLayout(mode) {
+  currentLayoutMode = mode;
+
+  const targets = new Map();
+  const hostnames = Array.from(nodeMap.keys());
+
+  // Precompute extents for some layouts (optional nice spacing)
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  hostnames.forEach(h => {
+    const p = nodeOriginalPos.get(h);
+    if (!p) return;
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+  });
+
+  hostnames.forEach((hostname, idx) => {
+    const orig = nodeOriginalPos.get(hostname) || new THREE.Vector3();
+
+    if (mode === "blueprint") {
+      targets.set(hostname, orig.clone());
+    } else if (mode === "topdown") {
+      // Flatten height, keep X/Z
+      targets.set(hostname, new THREE.Vector3(orig.x, 0, orig.z));
+    } else if (mode === "rackfront") {
+      // Show rack slot height as Y, collapse depth
+      targets.set(hostname, new THREE.Vector3(orig.x, orig.y, 0));
+    } else if (mode === "line") {
+      // Debug layout: put nodes in a line
+      targets.set(hostname, new THREE.Vector3((idx - hostnames.length / 2) * 18, 0, 0));
+    }
+  });
+
+  // Optionally hide cabinet box when layout isn't blueprint
+  const cabinet = scene.getObjectByName("cabinetBox");
+  if (cabinet) cabinet.visible = (mode === "blueprint");
+
+  animateNodePositions(targets, 650);
+
+  // Reframe camera nicely for the mode
+  setTimeout(() => {
+    if (mode === "topdown") viewPreset("top");
+    else if (mode === "rackfront") viewPreset("front");
+    else if (mode === "line") viewPreset("front");
+    else resetView();
+  }, 680);
+}
+
+
+// ==========================================
+// SAVED VIEWS (localStorage)
+// ==========================================
+const VIEWS_KEY = "mpiVis.savedViews.v1";
+
+function readViews() {
+  try { return JSON.parse(localStorage.getItem(VIEWS_KEY) || "{}"); }
+  catch { return {}; }
+}
+
+function writeViews(views) {
+  localStorage.setItem(VIEWS_KEY, JSON.stringify(views));
+}
+
+function initSavedViewsUI() {
+  const sel = document.getElementById("savedViews");
+  if (!sel) return;
+
+  sel.innerHTML = "";
+  const views = readViews();
+  const names = Object.keys(views).sort();
+
+  if (names.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(no saved views)";
+    sel.appendChild(opt);
+    sel.disabled = true;
+    return;
+  }
+
+  sel.disabled = false;
+  names.forEach(n => {
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n;
+    sel.appendChild(opt);
+  });
+}
+
+function saveCurrentView() {
+  const input = document.getElementById("viewName");
+  const name = (input?.value || "").trim();
+  if (!name) return alert("Enter a view name.");
+
+  const views = readViews();
+  const pose = getCameraPose();
+
+  views[name] = {
+    position: pose.position.toArray(),
+    target: pose.target.toArray(),
+    up: pose.up.toArray(),
+    layoutMode: currentLayoutMode
+  };
+
+  writeViews(views);
+  initSavedViewsUI();
+}
+
+function loadSelectedView() {
+  const sel = document.getElementById("savedViews");
+  const name = sel?.value;
+  if (!name) return;
+
+  const views = readViews();
+  const v = views[name];
+  if (!v) return;
+
+  if (v.layoutMode) applyLayout(v.layoutMode);
+
+  const pose = {
+    position: new THREE.Vector3().fromArray(v.position),
+    target: new THREE.Vector3().fromArray(v.target),
+    up: new THREE.Vector3().fromArray(v.up)
+  };
+
+  // If layout is animating, delay camera animation slightly
+  setTimeout(() => animateCameraPose(pose, 650), 680);
+}
+
+function deleteSelectedView() {
+  const sel = document.getElementById("savedViews");
+  const name = sel?.value;
+  if (!name) return;
+
+  const views = readViews();
+  delete views[name];
+  writeViews(views);
+  initSavedViewsUI();
+}
+
 // ================================
 // HARDWARE TOPOLOGY
 // ================================
@@ -743,6 +947,9 @@ function buildHardwareTopology() {
         rankToNodeGroup.set(host, nodeGroup);
         nodeMap.set(host, nodeGroup);
 
+        nodeGroup.userData = { host: host };   // enables node selection status text
+        nodeOriginalPos.set(host, nodeGroup.position.clone());
+
         const isActiveNode = nData.ranks.length > 0;
         const currentNodeMat = isActiveNode ? sharedActiveNodeMat : sharedIdleNodeMat;
 
@@ -839,7 +1046,9 @@ function buildHardwareTopology() {
  
         camera.position.set(cabCenterX, centerY, distanceToPullBack);
         controls.target.set(cabCenterX, centerY, 0);
-        controls.update(); 
+        controls.update();
+        cacheDefaultCameraPose();
+currentLayoutMode = "blueprint";
     }
 }
 
@@ -915,13 +1124,17 @@ function onCanvasClick(event) {
         const object = intersects[i].object;
         
         if (object.name === "mpiNode" || object.name === "mpiRank") {
-            const targetPosition = new THREE.Vector3();
-            // getWorldPosition extracts the absolute 3D coordinate out of the THREE.Group
-            object.getWorldPosition(targetPosition);
-            
-            flyCameraTo(targetPosition);
-            break; 
-        }
+    // If we clicked the node shell, use its parent group as the selection target
+    const selected = (object.name === "mpiNode" && object.parent) ? object.parent : object;
+    setSelectedObject(selected);
+
+    const targetPosition = new THREE.Vector3();
+    selected.getWorldPosition(targetPosition);
+
+    flyCameraTo(targetPosition);
+    break;
+}
+
     }
 }
 
