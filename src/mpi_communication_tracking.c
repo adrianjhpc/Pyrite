@@ -838,9 +838,13 @@ void add_large_data(int message_type, int sender1, int receiver1, int count1, MP
   }
 }
 
-int mpi_send_(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm, int *ierr){
-  *ierr =  MPI_Send(buf, count, datatype, dest, tag, comm);
-  return *ierr;
+void mpi_send_(const void *buf, int *count, MPI_Datatype *datatype, int *dest, int *tag, MPI_Comm *comm, int *ierr){
+  // Dereference the pointers to get the actual integers before passing to C
+  *ierr = MPI_Send(buf, *count, *datatype, *dest, *tag, *comm);
+}
+
+void mpi_recv_(void *buf, int *count, MPI_Datatype *datatype, int *source, int *tag, MPI_Comm *comm, int *status, int *ierr){
+  *ierr = MPI_Recv(buf, *count, *datatype, *source, *tag, *comm, (MPI_Status *)status);
 }
 
 int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm){

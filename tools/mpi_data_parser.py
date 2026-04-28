@@ -147,64 +147,102 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
                 "hostname": hostname, "x": hw_info["x"], "y": hw_info["y"], "z": hw_info["z"]
             })
 
-        # Read Communication Data per Rank
-        for _ in range(data["metadata"]["total_ranks"]):
-            rank_id = struct.unpack('=i', f.read(4))[0]
+         # Read the entire remainder of the file into memory
+        raw_data = f.read()
+        total_len = len(raw_data)
+        offset = 0
 
-            f.read(24) # Skip Header
-            num_small = struct.unpack('=i', f.read(4))[0]
+        # --- Bulletproof Anchor-Based Parsing ---
+        while offset < total_len:
+            # 1. SAFE READ: Rank ID
+            if offset + 4 > total_len: break
+            rank_id = struct.unpack('=i', raw_data[offset:offset+4])[0]
+            offset += 4
 
-            if num_small > 0:
-                # Read entire block of messages into memory at once
-                small_buffer = f.read(num_small * small_size)
+            # 2. SAFE READ: Small Message Header
+            if offset + 24 > total_len: break
+            small_str = raw_data[offset:offset+24]
+            offset += 24
+            
+            # If we lost sync due to corruption, scan forward to find the next valid anchor
+            if b"P2P Small Type Messages" not in small_str:
+                next_idx = raw_data.find(b"P2P Small Type Messages", offset)
+                if next_idx == -1: break
+                offset = next_idx - 4 # Rewind to capture the Rank ID
+                continue
+
+            # Skip the untrustworthy num_small counter
+            if offset + 4 > total_len: break
+            offset += 4
+
+            # 3. Find where the large messages begin to isolate the small message block
+            next_large_idx = raw_data.find(b"P2P Large Type Messages", offset)
+            if next_large_idx == -1:
+                small_bytes_len = total_len - offset
+                next_large_idx = total_len # Reached EOF
+            else:
+                small_bytes_len = next_large_idx - offset
+
+            # Trim any corrupted/partial bytes at the end of the block
+            valid_small_len = small_bytes_len - (small_bytes_len % small_size)
+            small_buffer = raw_data[offset : offset + valid_small_len]
+            
+            for time_val, msg_id, mtype, sender, receiver, count, bytes_vol in struct.iter_unpack(p2p_small_fmt, small_buffer):
+                call_name = MESSAGE_TYPES.get(mtype, f"UNKNOWN_{mtype}")
+                data["timeline"].append({
+                    "time": time_val, "event_id": msg_id, "rank_recording": rank_id,
+                    "call": call_name, "sender": sender, "receiver": receiver,
+                    "count": count, "bytes": bytes_vol, "category": "point-to-point"
+                })
                 
-                # iter_unpack handles the loop logic in C, drastically speeding up execution
-                for time_val, msg_id, mtype, sender, receiver, count, bytes_vol in struct.iter_unpack(p2p_small_fmt, small_buffer):
-                    call_name = MESSAGE_TYPES.get(mtype, f"UNKNOWN_{mtype}")
-                    
-                    data["timeline"].append({
-                        "time": time_val, "event_id": msg_id, "rank_recording": rank_id,
-                        "call": call_name, "sender": sender, "receiver": receiver,
-                        "count": count, "bytes": bytes_vol, "category": "point-to-point"
-                    })
-                    
-                    # Inline Stats Calculation
-                    if call_name not in data["statistics"]:
-                        data["statistics"][call_name] = dict(bins_template)
-                        
-                    if bytes_vol < 128: data["statistics"][call_name]["< 128B"] += 1
-                    elif bytes_vol < 1024: data["statistics"][call_name]["128B - 1KB"] += 1
-                    elif bytes_vol < 65536: data["statistics"][call_name]["1KB - 64KB"] += 1
-                    elif bytes_vol < 1048576: data["statistics"][call_name]["64KB - 1MB"] += 1
-                    elif bytes_vol < 16777216: data["statistics"][call_name]["1MB - 16MB"] += 1
+                if call_name not in data["statistics"]:
+                    data["statistics"][call_name] = dict(bins_template)
+                if bytes_vol < 128: data["statistics"][call_name]["< 128B"] += 1
+                elif bytes_vol < 1024: data["statistics"][call_name]["128B - 1KB"] += 1
+                elif bytes_vol < 65536: data["statistics"][call_name]["1KB - 64KB"] += 1
+                elif bytes_vol < 1048576: data["statistics"][call_name]["64KB - 1MB"] += 1
+                elif bytes_vol < 16777216: data["statistics"][call_name]["1MB - 16MB"] += 1
+                else: data["statistics"][call_name]["> 16MB"] += 1
+
+            # Jump offset exactly to the large messages anchor
+            offset = next_large_idx
+
+            # 4. SAFE READ: Large Message Header
+            if offset + 24 > total_len: break
+            offset += 24 # Skip "P2P Large Type Messages" string
+
+            if offset + 4 > total_len: break
+            offset += 4  # Skip the untrustworthy num_large counter
+
+            # 5. The large messages end where the NEXT rank begins (denoted by the next Small anchor)
+            next_small_idx = raw_data.find(b"P2P Small Type Messages", offset)
+            if next_small_idx == -1:
+                large_bytes_len = total_len - offset
+                offset = total_len # EOF
+            else:
+                large_bytes_len = (next_small_idx - 4) - offset
+                offset = next_small_idx - 4 # Set offset to the next Rank ID
+
+            # Trim any corrupted/partial bytes at the end of the block
+            valid_large_len = large_bytes_len - (large_bytes_len % large_size)
+            large_buffer = raw_data[offset - large_bytes_len : offset - large_bytes_len + valid_large_len]
+            
+            for time_val, msg_id, mtype, s1, r1, c1, b1, s2, r2, c2, b2 in struct.iter_unpack(p2p_large_fmt, large_buffer):
+                call_name = MESSAGE_TYPES.get(mtype, f"UNKNOWN_{mtype}")
+                data["timeline"].extend([
+                    {"time": time_val, "event_id": msg_id, "rank_recording": rank_id, "call": call_name, "sender": s1, "receiver": r1, "count": c1, "bytes": b1, "category": "collective_part_1"},
+                    {"time": time_val, "event_id": msg_id, "rank_recording": rank_id, "call": call_name, "sender": s2, "receiver": r2, "count": c2, "bytes": b2, "category": "collective_part_2"}
+                ])
+                
+                if call_name not in data["statistics"]:
+                    data["statistics"][call_name] = dict(bins_template)
+                for b_vol in (b1, b2):
+                    if b_vol < 128: data["statistics"][call_name]["< 128B"] += 1
+                    elif b_vol < 1024: data["statistics"][call_name]["128B - 1KB"] += 1
+                    elif b_vol < 65536: data["statistics"][call_name]["1KB - 64KB"] += 1
+                    elif b_vol < 1048576: data["statistics"][call_name]["64KB - 1MB"] += 1
+                    elif b_vol < 16777216: data["statistics"][call_name]["1MB - 16MB"] += 1
                     else: data["statistics"][call_name]["> 16MB"] += 1
-
-
-            f.read(24) # Skip Header
-            num_large = struct.unpack('=i', f.read(4))[0]
-
-            if num_large > 0:
-                large_buffer = f.read(num_large * large_size)
-                
-                for time_val, msg_id, mtype, s1, r1, c1, b1, s2, r2, c2, b2 in struct.iter_unpack(p2p_large_fmt, large_buffer):
-                    call_name = MESSAGE_TYPES.get(mtype, f"UNKNOWN_{mtype}")
-                    
-                    data["timeline"].extend([
-                        {"time": time_val, "event_id": msg_id, "rank_recording": rank_id, "call": call_name, "sender": s1, "receiver": r1, "count": c1, "bytes": b1, "category": "collective_part_1"},
-                        {"time": time_val, "event_id": msg_id, "rank_recording": rank_id, "call": call_name, "sender": s2, "receiver": r2, "count": c2, "bytes": b2, "category": "collective_part_2"}
-                    ])
-                    
-                    # Inline Stats Calculation for both halves of the payload
-                    if call_name not in data["statistics"]:
-                        data["statistics"][call_name] = dict(bins_template)
-                        
-                    for b_vol in (b1, b2):
-                        if b_vol < 128: data["statistics"][call_name]["< 128B"] += 1
-                        elif b_vol < 1024: data["statistics"][call_name]["128B - 1KB"] += 1
-                        elif b_vol < 65536: data["statistics"][call_name]["1KB - 64KB"] += 1
-                        elif b_vol < 1048576: data["statistics"][call_name]["64KB - 1MB"] += 1
-                        elif b_vol < 16777216: data["statistics"][call_name]["1MB - 16MB"] += 1
-                        else: data["statistics"][call_name]["> 16MB"] += 1
 
     # Sort all events chronologically
     data["timeline"].sort(key=lambda x: x["time"])
