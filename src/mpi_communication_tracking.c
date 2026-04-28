@@ -250,7 +250,7 @@ int MPI_Finalize(){
   
   int memory_used = 0, node_max, node_min, node_total, root_indivi_max, root_indivi_min, root_node_av, root_node_min, root_node_max;  
   
-  double min_time, max_time, offset_time;
+  double min_time, max_time;
 
   // Get the rank and size of the node communicator this process is involved in.
   PMPI_Comm_size(MPI_COMM_WORLD, &temp_size);
@@ -326,8 +326,6 @@ int MPI_Finalize(){
   PMPI_Allreduce(&my_time, &max_time, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
   PMPI_Allreduce(&my_time, &min_time, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
 
-  offset_time = my_time - min_time;
-  
   write_data_output();
 
   free(small_head);
