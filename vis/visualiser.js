@@ -464,8 +464,12 @@ function initDashboard() {
 // 3D HOVER TOOLTIPS
 // ==========================================
 function initTooltip() {
-    if (document.getElementById("mpiTooltip")) return;
-    
+  const existing = document.getElementById("mpiTooltip");
+  if (existing) {
+    ooltipEl = existing;
+    return;
+  }   
+ 
     tooltipEl = document.createElement('div');
     tooltipEl.id = "mpiTooltip";
     tooltipEl.style.position = 'absolute';
@@ -499,7 +503,7 @@ function setCameraPose(pose) {
   camera.position.copy(pose.position);
   controls.target.copy(pose.target);
   controls.update();
-}
+
 
 function animateCameraPose(toPose, duration = 650) {
   const from = getCameraPose();
