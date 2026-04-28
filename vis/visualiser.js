@@ -57,7 +57,7 @@ let defaultCameraPose = null;   // set after buildHardwareTopology() auto-frames
 let selectedObject = null;      // last clicked mpiNode/mpiRank
 let isFollowEnabled = false;
 let followOffset = new THREE.Vector3(0, 15, 40);
-let desiredCam = controls.target.clone().add(followOffset);
+let desiredCam = new THREE.Vector3();
 
 const nodeOriginalPos = new Map();
 let currentLayoutMode = "blueprint";
