@@ -84,9 +84,15 @@ const MPI_CATEGORIES = {
     "MPI_ISSEND": { type: "p2p_nonblock", color: 0x3fb950 },
     "MPI_IRSEND": { type: "p2p_nonblock", color: 0x3fb950 },
     
-    // States (Dimmer Teal)
+    // States / completion calls (Dimmer Teal)
     "MPI_WAIT": { type: "state", color: 0x238636 },
     "MPI_WAITALL": { type: "state", color: 0x238636 },
+    "MPI_WAITANY": { type: "state", color: 0x238636 },
+    "MPI_WAITSOME": { type: "state", color: 0x238636 },
+    "MPI_TEST": { type: "state", color: 0x238636 },
+    "MPI_TESTANY": { type: "state", color: 0x238636 },
+    "MPI_TESTALL": { type: "state", color: 0x238636 },
+    "MPI_TESTSOME": { type: "state", color: 0x238636 },
 
     // Collectives (Orange)
     "MPI_BCAST": { type: "collective", color: 0xd29922 },
@@ -469,10 +475,13 @@ function initDashboard() {
 
     buildHardwareTopology();
     renderMetadata();
+    if (window.AnalyticsUI) {
+        AnalyticsUI.renderAnalytics();
+    }
     renderSpectrogram();
     initDynamicSpectrogram();
     initLegend();
-    
+ 
     void seekToTime(minTime).catch(err => {
 	console.error(err);
 	pausePlayback();
@@ -1255,6 +1264,10 @@ async function seekToTime(time, isPlayingLoop = false) {
     document.getElementById("timeSlider").value = currentTime;
     document.getElementById("currentTimeLabel").textContent = currentTime.toFixed(3);
     
+    if (window.AnalyticsUI) {
+        AnalyticsUI.updateAnalyticsTimeWindowIndicator(currentTime);
+    }
+
     try {
 	await ensureChunkLoadedForTime(currentTime);
     } catch (e) {
@@ -1267,7 +1280,6 @@ async function seekToTime(time, isPlayingLoop = false) {
     if (!isPlayingLoop) {
         updateDynamicSpectrogram(activeEvents);
     }
-    
     return activeEvents;
 }
 
