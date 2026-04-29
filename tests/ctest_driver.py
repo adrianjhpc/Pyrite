@@ -616,6 +616,218 @@ def validate_testsome(trace):
         bytes=0,
     )
 
+def validate_fortran_nonblocking_wait(trace):
+    require(trace["world_size"] == 2, "fortran_nonblocking_wait: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    require_one(
+        rank0["small"],
+        message_type=MPI_ISEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank0["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=0,
+        receiver=0,
+        count=1,
+        bytes=0,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+
+def validate_fortran_nonblocking_any_source_wait(trace):
+    require(trace["world_size"] == 3, "fortran_nonblocking_any_source_wait: world size should be 3")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+    rank2 = trace["sections"][2]
+
+    require_one(
+        rank0["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=1,
+        receiver=0,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank0["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=0,
+        receiver=0,
+        count=1,
+        bytes=0,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_SEND_TYPE,
+        sender=1,
+        receiver=0,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank2["small"],
+        message_type=MPI_SEND_TYPE,
+        sender=2,
+        receiver=0,
+        count=1,
+        bytes=4,
+    )
+
+
+def validate_fortran_waitall(trace):
+    require(trace["world_size"] == 2, "fortran_waitall: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    require_n(
+        rank0["small"],
+        2,
+        message_type=MPI_ISEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank0["small"],
+        message_type=MPI_WAITALL_TYPE,
+        sender=0,
+        receiver=0,
+        count=2,
+        bytes=0,
+    )
+
+    require_n(
+        rank1["small"],
+        2,
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_WAITALL_TYPE,
+        sender=1,
+        receiver=1,
+        count=2,
+        bytes=0,
+    )
+
+
+def validate_fortran_waitany(trace):
+    require(trace["world_size"] == 2, "fortran_waitany: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    require_n(
+        rank0["small"],
+        2,
+        message_type=MPI_SEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_n(
+        rank1["small"],
+        2,
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_WAITANY_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+
+def validate_fortran_testall(trace):
+    require(trace["world_size"] == 2, "fortran_testall: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    require_n(
+        rank0["small"],
+        2,
+        message_type=MPI_SEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_n(
+        rank1["small"],
+        2,
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_TESTALL_TYPE,
+        sender=1,
+        receiver=1,
+        count=2,
+        bytes=0,
+    )
+
 
 VALIDATORS = {
     "send_recv": validate_send_recv,
@@ -631,8 +843,12 @@ VALIDATORS = {
     "testall": validate_testall,
     "testany": validate_testany,
     "testsome": validate_testsome,
+    "fortran_nonblocking_wait": validate_fortran_nonblocking_wait,
+    "fortran_nonblocking_any_source_wait": validate_fortran_nonblocking_any_source_wait,
+    "fortran_waitall": validate_fortran_waitall,
+    "fortran_waitany": validate_fortran_waitany,
+    "fortran_testall": validate_fortran_testall,
 }
-
 
 def main():
     parser = argparse.ArgumentParser()
