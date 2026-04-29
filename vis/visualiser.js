@@ -244,6 +244,10 @@ function animateThreeJS() {
         });
     }
 
+    if (window.Analytics3D) {
+        Analytics3D.update(performance.now());
+    }
+
     renderer.render(scene, camera);
 }
 
@@ -421,6 +425,10 @@ function clearTopologyScene() {
     rankMap.clear();
     activelyGlowingRanks.clear();
 
+    if (window.Analytics3D) {
+        Analytics3D.clear();
+    }
+
     const toRemove = [];
     scene.traverse(obj => { 
 	if (obj.name === "cabinetBox" || obj.name === "groupBox") { 
@@ -475,13 +483,19 @@ function initDashboard() {
 
     buildHardwareTopology();
     renderMetadata();
+
     if (window.AnalyticsUI) {
         AnalyticsUI.renderAnalytics();
     }
+
+    if (window.Analytics3D) {
+        Analytics3D.refreshHighlights();
+    }
+
     renderSpectrogram();
     initDynamicSpectrogram();
-    initLegend();
- 
+    initLegend();   
+
     void seekToTime(minTime).catch(err => {
 	console.error(err);
 	pausePlayback();
@@ -719,11 +733,16 @@ function applyLayout(mode) {
     animateNodePositions(targets, 650);
 
     setTimeout(() => {
-	if (mode === "topdown") viewPreset("top");
-	else if (mode === "rackfront") viewPreset("front");
-	else if (mode === "line") viewPreset("front");
-	else resetView();
+        if (mode === "topdown") viewPreset("top");
+        else if (mode === "rackfront") viewPreset("front");
+        else if (mode === "line") viewPreset("front");
+        else resetView();
+
+        if (window.Analytics3D) {
+            Analytics3D.refreshHighlights();
+        }
     }, 680);
+
 }
 
 
@@ -1319,9 +1338,16 @@ function renderActiveCommunications() {
     clearLines();
 
     const raw = parseFloat(document.getElementById("speedSlider").value);
+    
+    // Define the tight window for fast P2P laser beams
     const windowSize = Math.min(0.2, 0.05 * Math.pow(10, raw));
-
     const minTimeWindow = currentTime - windowSize;
+    
+    // Define the wide window for Collectives to account for Time Skew
+    // (Lingers for at least 0.5 simulation seconds, or 8x the normal window)
+    const collectiveWindowSize = Math.max(windowSize * 8.0, 0.5);
+    const minCollectiveTimeWindow = currentTime - collectiveWindowSize;
+
     const timeline = parsedData.timeline;
     const activeEvents = [];
 
@@ -1337,12 +1363,23 @@ function renderActiveCommunications() {
         const MAX_VISIBLE_MESSAGES = 800; 
         let eventsCaptured = 0;
  
+        // Gather events using the Two-Tiered Time Window
         for (let i = right; i >= 0; i--) {
-            if (timeline[i].time >= minTimeWindow) {
-                activeEvents.push(timeline[i]);
-                eventsCaptured++;
-                if (eventsCaptured >= MAX_VISIBLE_MESSAGES) break; 
-            } else break;
+            const eventTime = timeline[i].time;
+            
+            // Check against the wider collective window first so we don't break early
+            if (eventTime >= minCollectiveTimeWindow) {
+                const cat = MPI_CATEGORIES[timeline[i].call] || DEFAULT_CATEGORY;
+                
+                // P2P must fit in the tight window. Collectives are allowed the wide window.
+                if (eventTime >= minTimeWindow || cat.type === "collective") {
+                    activeEvents.push(timeline[i]);
+                    eventsCaptured++;
+                    if (eventsCaptured >= MAX_VISIBLE_MESSAGES) break; 
+                }
+            } else {
+                break; // We've gone past the expanded collective window, safe to stop searching
+            }
         } 
     }
 
@@ -1372,8 +1409,6 @@ function renderActiveCommunications() {
         if (event.sender === event.receiver) return;
 
         // Grouping Logic
-        // For collectives, group by chassis to avoid drawing 64 lines for one node.
-        // For P2P, group by sender, receiver, AND call type.
         let connectionKey;
         if (cat.type === "collective" && sData && rData) {
            connectionKey = `coll-${sData.nodeGroup.uuid}-${rData.nodeGroup.uuid}-${event.call}`;
