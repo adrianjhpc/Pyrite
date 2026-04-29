@@ -204,7 +204,7 @@ def _top_dict_items(dct, n, reverse=True):
     return sorted(dct.items(), key=lambda kv: kv[1], reverse=reverse)[:n]
 
 
-def print_progress(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='█'):
+def print_progress(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='#'):
     """
     Call in a loop to create terminal progress bar.
     """
@@ -709,8 +709,15 @@ def analyse_trace(data):
         end_t = 0.0
         runtime = 0.0
 
+    total_events = len(sorted_timeline)
+
+    # ---------------------------------------------------------
     # Pass 1: basic counts over all recorded events.
-    for event in sorted_timeline:
+    # ---------------------------------------------------------
+    print("\nAnalyzing Trace - Pass 1 (Basic Counts)...")
+    print_progress(0, total_events, prefix='Pass 1: ', suffix='Complete', length=40, fill='#')
+    
+    for idx, event in enumerate(sorted_timeline):
         rr = event["rank_recording"]
         call = event["call"]
         count = event.get("count", 0)
@@ -745,8 +752,21 @@ def analyse_trace(data):
         if call in GLOBAL_COLLECTIVES:
             global_collective_total_events += 1
 
+        # Throttle progress bar updates to save I/O time
+        if idx % 10000 == 0:
+            print_progress(idx, total_events, prefix='Pass 1: ', suffix='Complete', length=40, fill='#')
+            
+    # Ensure it hits 100% at the end
+    print_progress(total_events, total_events, prefix='Pass 1: ', suffix='Complete', length=40, fill='#')
+
+
+    # ---------------------------------------------------------
     # Pass 2: canonical pair/link traffic.
-    for event in sorted_timeline:
+    # ---------------------------------------------------------
+    print("Analyzing Trace - Pass 2 (Canonical Traffic)...")
+    print_progress(0, total_events, prefix='Pass 2: ', suffix='Complete', length=40, fill='#')
+    
+    for idx, event in enumerate(sorted_timeline):
         if not _is_canonical_transfer_event(event):
             continue
 
@@ -791,6 +811,15 @@ def analyse_trace(data):
                 rooted_collective_roots[root]["bytes"] += num_bytes
                 rooted_collective_roots[root]["calls"][call] += 1
 
+        # Throttle progress bar updates to save I/O time
+        if idx % 10000 == 0:
+            print_progress(idx, total_events, prefix='Pass 2: ', suffix='Complete', length=40, fill='#')
+            
+    # Ensure it hits 100% at the end
+    print_progress(total_events, total_events, prefix='Pass 2: ', suffix='Complete', length=40, fill='#')
+
+
+    print("Finalising rank sets...")
     # Finalise per-rank sets into counts / serialisable data.
     per_rank_list = []
     total_touch_bytes = []
@@ -807,6 +836,8 @@ def analyse_trace(data):
         out_peer_counts.append(entry["distinct_out_peers"])
         in_peer_counts.append(entry["distinct_in_peers"])
 
+    print("Calculatng top links...")
+
     # Top links.
     top_links = []
     for (sender, receiver), stats in sorted(pair_stats.items(), key=lambda kv: kv[1]["bytes"], reverse=True)[:20]:
@@ -819,6 +850,8 @@ def analyse_trace(data):
             "first_time": stats["first_time"],
             "last_time": stats["last_time"],
         })
+
+    print("Calculating top ranks...")
 
     # Top ranks.
     top_ranks_by_out = [
@@ -834,6 +867,8 @@ def analyse_trace(data):
         for r in sorted(per_rank_list, key=lambda x: x["touch_bytes"], reverse=True)[:10]
     ]
 
+    print("Analysing collectives...")
+
     # Rooted collective roots.
     rooted_collective_summary = []
     for root, stats in sorted(rooted_collective_roots.items(), key=lambda kv: kv[1]["bytes"], reverse=True):
@@ -844,6 +879,7 @@ def analyse_trace(data):
             "calls": dict(sorted(stats["calls"].items())),
         })
 
+    print("Analysing barriers...")
     # Barrier skew analysis.
     barrier_spreads = []
     if total_ranks > 0:
@@ -864,6 +900,8 @@ def analyse_trace(data):
 
     max_barrier_spread = max((b["spread"] for b in barrier_spreads), default=0.0)
     avg_barrier_spread = _mean([b["spread"] for b in barrier_spreads]) if barrier_spreads else 0.0
+
+    print("Looking for patterns")
 
     # Patterns.
     patterns = []
@@ -1014,8 +1052,8 @@ def analyse_trace(data):
     issues = []
 
     # Issue: small-message dominated traffic
-    small128_total = sum(1 for e in sorted_timeline if _is_canonical_transfer_event(e) and e["bytes"] < 128)
-    small1k_total = sum(1 for e in sorted_timeline if _is_canonical_transfer_event(e) and e["bytes"] < 1024)
+    small128_total = sum(1 for e in sorted_timeline if _is_canonical_transfer_event(e) and e.get("bytes", 0) < 128)
+    small1k_total = sum(1 for e in sorted_timeline if _is_canonical_transfer_event(e) and e.get("bytes", 0) < 1024)
     small128_frac = _safe_div(small128_total, canonical_total_events)
     small1k_frac = _safe_div(small1k_total, canonical_total_events)
 
@@ -1171,6 +1209,8 @@ def analyse_trace(data):
         window_count = min(40, max(10, len(sorted_timeline) // 50000 + 10))
     time_windows = _build_time_windows(sorted_timeline, window_count)
 
+    print("\nAnalysis Complete.")
+
     return {
         "summary": {
             "total_events": len(sorted_timeline),
@@ -1195,7 +1235,6 @@ def analyse_trace(data):
         "issues": issues,
         "time_windows": time_windows,
     }
-
 
 # -----------------------------------------------------------------------------
 # Main parser
@@ -1309,8 +1348,13 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
             p2p_large_fmt,
         )
 
+
+    print("Sorting the timeline...")
+
     # Chronological ordering.
     data["timeline"].sort(key=lambda x: (x["time"], x["event_id"], x["rank_recording"]))
+
+    print("Reading in the hardware blueprint...");
 
     # Hardware blueprint.
     if hw_filepath and os.path.exists(hw_filepath):
@@ -1322,8 +1366,8 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
                 data["metadata"]["system_name"] = blueprint["metadata"]["system_name"]
     else:
         data["hardware_blueprint"] = None
-
-    # New: extract analysis.
+     
+    print("Running analysis on the timeline...")
     data["analysis"] = analyse_trace(data)
 
     # Chunk and compress the timeline.
@@ -1332,8 +1376,14 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
     compressed_payloads = []
     current_byte_offset = 0
 
-    print("Compressing chunks...")
-    for i in range(0, len(data["timeline"]), CHUNK_SIZE):
+    total_events = len(data["timeline"])
+    total_chunks = (total_events + CHUNK_SIZE - 1) // CHUNK_SIZE
+
+    print("Compressing {} chunks...".format(total_chunks))
+    print_progress(0, total_chunks, prefix='Compressing:  ', suffix='Complete', length=40)
+
+    for idx, i in enumerate(range(0, total_events, CHUNK_SIZE)):
+
         chunk_data = data["timeline"][i:i + CHUNK_SIZE]
         chunk_json = json.dumps(chunk_data, separators=(",", ":")).encode("utf-8")
         compressed_chunk = zlib.compress(chunk_json)
