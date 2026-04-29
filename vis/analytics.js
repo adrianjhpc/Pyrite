@@ -99,11 +99,64 @@
         return `${((Number(frac) || 0) * 100).toFixed(1)}%`;
     }
 
-    function severityColor(sev) {
+    function severityColour(sev) {
         if (sev === "critical") return "#f85149";
         if (sev === "warning") return "#d29922";
         return "#58a6ff";
     }
+
+    function issueHasSpatialTargets(issue) {
+    if (!issue) return false;
+
+    if (Array.isArray(issue.ranks) && issue.ranks.length > 0) {
+        return true;
+    }
+
+    if (Array.isArray(issue.pairs)) {
+        const hasPair = issue.pairs.some(pair => Array.isArray(pair) && pair.length === 2);
+        if (hasPair) return true;
+    }
+
+    const m = issue.metrics || {};
+    if (Number.isInteger(m.root)) return true;
+    if (Number.isInteger(m.sender) && Number.isInteger(m.receiver)) return true;
+
+    return false;
+}
+
+function getFocusedIssueIndexFrom3D() {
+    if (window.Analytics3D && typeof window.Analytics3D.getFocusedIssueIndex === "function") {
+        return window.Analytics3D.getFocusedIssueIndex();
+    }
+    return null;
+}
+
+function toggleIssueIsolation(issueIndex) {
+    if (!window.Analytics3D) return;
+
+    const current = getFocusedIssueIndexFrom3D();
+
+    if (current === issueIndex) {
+        if (typeof window.Analytics3D.clearFocus === "function") {
+            window.Analytics3D.clearFocus();
+        }
+    } else {
+        if (typeof window.Analytics3D.focusIssue === "function") {
+            window.Analytics3D.focusIssue(issueIndex);
+        }
+    }
+
+    renderAnalytics();
+}
+
+function clearIssueIsolationUI() {
+    if (!window.Analytics3D) return;
+    if (typeof window.Analytics3D.clearFocus === "function") {
+        window.Analytics3D.clearFocus();
+    }
+    renderAnalytics();
+}
+
 
     function createMetricGrid(items) {
         const grid = document.createElement("div");
@@ -333,86 +386,158 @@
     }
 
     function renderAnalysisIssuesCard(container, analysis) {
-        const issues = analysis.issues || [];
-        const { card, body } = createAnalyticsCard("Potential Performance Issues", "#f85149");
+    const issues = analysis.issues || [];
+    const { card, body } = createAnalyticsCard("Potential Performance Issues", "#f85149");
 
-        if (issues.length === 0) {
-            const empty = document.createElement("div");
-            empty.textContent = "No obvious performance issues were flagged by the heuristic analysis.";
-            empty.style.color = "#8b949e";
-            body.appendChild(empty);
-            container.appendChild(card);
-            return;
-        }
+    const focusedIssueIndex = getFocusedIssueIndexFrom3D();
 
-        issues.forEach(issue => {
-            const color = severityColor(issue.severity);
+    if (focusedIssueIndex != null && focusedIssueIndex >= 0 && focusedIssueIndex < issues.length) {
+        const activeIssue = issues[focusedIssueIndex];
 
-            const box = document.createElement("div");
-            box.style.padding = "10px 12px";
-            box.style.marginBottom = "10px";
-            box.style.backgroundColor = "rgba(13, 17, 23, 0.75)";
-            box.style.border = `1px solid ${color}`;
-            box.style.borderRadius = "6px";
+        const banner = document.createElement("div");
+        banner.style.padding = "10px 12px";
+        banner.style.marginBottom = "12px";
+        banner.style.backgroundColor = "rgba(88, 166, 255, 0.08)";
+        banner.style.border = "1px solid #58a6ff";
+        banner.style.borderRadius = "6px";
+        banner.style.display = "flex";
+        banner.style.justifyContent = "space-between";
+        banner.style.alignItems = "center";
+        banner.style.gap = "12px";
 
-            const top = document.createElement("div");
-            top.style.display = "flex";
-            top.style.justifyContent = "space-between";
-            top.style.alignItems = "center";
-            top.style.gap = "12px";
+        const text = document.createElement("div");
+        text.style.color = "#c9d1d9";
+        text.style.fontSize = "0.84rem";
+        text.innerHTML = `3D view is isolated to issue: <span style="color:#58a6ff; font-family:'Fira Code', monospace;">${String(activeIssue.type || "issue").replace(/_/g, " ")}</span>`;
 
-            const title = document.createElement("div");
-            title.style.color = "#c9d1d9";
-            title.style.fontWeight = "700";
-            title.textContent = String(issue.type || "issue").replace(/_/g, " ");
-
-            const sev = document.createElement("div");
-            sev.textContent = `${String(issue.severity || "info").toUpperCase()} ${(issue.score || 0).toFixed(2)}`;
-            sev.style.color = color;
-            sev.style.fontFamily = "'Fira Code', monospace";
-            sev.style.fontSize = "0.8rem";
-
-            const desc = document.createElement("div");
-            desc.style.color = "#8b949e";
-            desc.style.marginTop = "6px";
-            desc.style.fontSize = "0.85rem";
-            desc.textContent = issue.description || "";
-
-            box.appendChild(top);
-            top.appendChild(title);
-            top.appendChild(sev);
-            box.appendChild(desc);
-
-            const tags = document.createElement("div");
-            tags.style.marginTop = "8px";
-
-            if (Array.isArray(issue.ranks)) {
-                issue.ranks.forEach(rank => {
-                    tags.appendChild(
-                        createClickablePill(`rank ${rank}`, color, () => focusRankFromAnalytics(rank))
-                    );
-                });
-            }
-
-            if (Array.isArray(issue.pairs)) {
-                issue.pairs.forEach(pair => {
-                    if (Array.isArray(pair) && pair.length === 2) {
-                        tags.appendChild(
-                            createClickablePill(`${pair[0]} → ${pair[1]}`, color, () => focusLinkFromAnalytics(pair[0], pair[1]))
-                        );
-                    }
-                });
-            }
-
-            if (tags.childNodes.length > 0) {
-                box.appendChild(tags);
-            }
-
-            body.appendChild(box);
+        const btnClear = document.createElement("button");
+        btnClear.textContent = "Clear isolate";
+        btnClear.style.background = "#21262d";
+        btnClear.style.color = "#c9d1d9";
+        btnClear.style.border = "1px solid #30363d";
+        btnClear.style.borderRadius = "4px";
+        btnClear.style.padding = "4px 8px";
+        btnClear.style.cursor = "pointer";
+        btnClear.addEventListener("click", (e) => {
+            e.stopPropagation();
+            clearIssueIsolationUI();
         });
 
-        container.appendChild(card);
+        banner.appendChild(text);
+        banner.appendChild(btnClear);
+        body.appendChild(banner);
     }
+
+    if (issues.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = "No obvious performance issues were flagged by the heuristic analysis.";
+        empty.style.color = "#8b949e";
+        body.appendChild(empty);
+        container.appendChild(card);
+        return;
+    }
+
+    issues.forEach((issue, issueIndex) => {
+        const color = severityColour(issue.severity);
+        const isFocused = focusedIssueIndex === issueIndex;
+        const canIsolate = issueHasSpatialTargets(issue);
+
+        const box = document.createElement("div");
+        box.style.padding = "10px 12px";
+        box.style.marginBottom = "10px";
+        box.style.backgroundColor = isFocused ? "rgba(88, 166, 255, 0.08)" : "rgba(13, 17, 23, 0.75)";
+        box.style.border = `1px solid ${isFocused ? "#58a6ff" : color}`;
+        box.style.borderRadius = "6px";
+        box.style.boxShadow = isFocused ? "0 0 12px rgba(88,166,255,0.25)" : "none";
+
+        const top = document.createElement("div");
+        top.style.display = "flex";
+        top.style.justifyContent = "space-between";
+        top.style.alignItems = "center";
+        top.style.gap = "12px";
+
+        const title = document.createElement("div");
+        title.style.color = "#c9d1d9";
+        title.style.fontWeight = "700";
+        title.textContent = String(issue.type || "issue").replace(/_/g, " ");
+
+        const sev = document.createElement("div");
+        sev.textContent = `${String(issue.severity || "info").toUpperCase()} ${(issue.score || 0).toFixed(2)}`;
+        sev.style.color = isFocused ? "#58a6ff" : color;
+        sev.style.fontFamily = "'Fira Code', monospace";
+        sev.style.fontSize = "0.8rem";
+
+        const desc = document.createElement("div");
+        desc.style.color = "#8b949e";
+        desc.style.marginTop = "6px";
+        desc.style.fontSize = "0.85rem";
+        desc.textContent = issue.description || "";
+
+        box.appendChild(top);
+        top.appendChild(title);
+        top.appendChild(sev);
+        box.appendChild(desc);
+
+        const tags = document.createElement("div");
+        tags.style.marginTop = "8px";
+
+        if (Array.isArray(issue.ranks)) {
+            issue.ranks.forEach(rank => {
+                tags.appendChild(
+                    createClickablePill(`rank ${rank}`, color, () => focusRankFromAnalytics(rank))
+                );
+            });
+        }
+
+        if (Array.isArray(issue.pairs)) {
+            issue.pairs.forEach(pair => {
+                if (Array.isArray(pair) && pair.length === 2) {
+                    tags.appendChild(
+                        createClickablePill(`${pair[0]} → ${pair[1]}`, color, () => focusLinkFromAnalytics(pair[0], pair[1]))
+                    );
+                }
+            });
+        }
+
+        if (tags.childNodes.length > 0) {
+            box.appendChild(tags);
+        }
+
+        const actions = document.createElement("div");
+        actions.style.display = "flex";
+        actions.style.gap = "8px";
+        actions.style.marginTop = "10px";
+        actions.style.flexWrap = "wrap";
+
+        const btnIsolate = document.createElement("button");
+        btnIsolate.textContent = isFocused ? "Clear 3D isolate" : "Isolate 3D";
+        btnIsolate.style.background = isFocused ? "#1f6feb" : "#21262d";
+        btnIsolate.style.color = "#c9d1d9";
+        btnIsolate.style.border = `1px solid ${isFocused ? "#58a6ff" : "#30363d"}`;
+        btnIsolate.style.borderRadius = "4px";
+        btnIsolate.style.padding = "4px 8px";
+        btnIsolate.style.cursor = canIsolate ? "pointer" : "not-allowed";
+        btnIsolate.disabled = !canIsolate;
+        btnIsolate.style.opacity = canIsolate ? "1" : "0.5";
+        btnIsolate.title = canIsolate
+            ? "Show only this issue's related 3D highlights"
+            : "This issue does not have direct spatial targets to isolate";
+
+        btnIsolate.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (!canIsolate) return;
+            toggleIssueIsolation(issueIndex);
+        });
+
+        actions.appendChild(btnIsolate);
+        box.appendChild(actions);
+
+        body.appendChild(box);
+    });
+
+    container.appendChild(card);
+}
+
 
     function renderAnalysisTopRanksCard(container, analysis) {
         const ranks = analysis.top_ranks_by_touch_bytes || [];

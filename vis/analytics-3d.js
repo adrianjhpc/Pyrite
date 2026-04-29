@@ -31,6 +31,8 @@
     let animatedHalos = [];
     let animatedLinks = [];
 
+    let focusedIssueIndex = null;
+
     function hasCoreGlobals() {
         return (
             typeof THREE !== "undefined" &&
@@ -85,7 +87,7 @@
         }
     }
 
-    function clear() {
+    function clearObjectsOnly() {
         animatedHalos = [];
         animatedLinks = [];
 
@@ -104,10 +106,16 @@
         rootGroup = null;
     }
 
+    function clear() {
+        focusedIssueIndex = null;
+        clearObjectsOnly();
+    }
+
     function setEnabled(enabled) {
         options.enabled = !!enabled;
+
         if (!options.enabled) {
-            clear();
+            clearObjectsOnly();
         } else {
             refreshHighlights();
         }
@@ -117,7 +125,7 @@
         options = Object.assign({}, options, newOptions || {});
 
         if (!options.enabled) {
-            clear();
+            clearObjectsOnly();
             return;
         }
 
@@ -126,6 +134,39 @@
 
     function getConfig() {
         return Object.assign({}, options);
+    }
+
+    function getFocusedIssueIndex() {
+        return focusedIssueIndex;
+    }
+
+    function focusIssue(issueIndex) {
+        if (!hasCoreGlobals() || !parsedData || !parsedData.analysis || !Array.isArray(parsedData.analysis.issues)) {
+            return;
+        }
+
+        if (
+            issueIndex == null ||
+            issueIndex < 0 ||
+            issueIndex >= parsedData.analysis.issues.length
+        ) {
+            clearFocus();
+            return;
+        }
+
+        focusedIssueIndex = issueIndex;
+        refreshHighlights();
+    }
+
+    function clearFocus() {
+        focusedIssueIndex = null;
+
+        if (!options.enabled) {
+            clearObjectsOnly();
+            return;
+        }
+
+        refreshHighlights();
     }
 
     function priorityForRankKind(kind, severity) {
@@ -326,6 +367,82 @@
             .slice(0, options.maxTopLinks + 4);
     }
 
+    function collectFocusedIssueHighlights(analysis, issueIndex) {
+        const issue = analysis &&
+                      Array.isArray(analysis.issues) &&
+                      issueIndex != null &&
+                      issueIndex >= 0 &&
+                      issueIndex < analysis.issues.length
+            ? analysis.issues[issueIndex]
+            : null;
+
+        if (!issue) {
+            return { ranks: [], links: [] };
+        }
+
+        const sev = issue.severity || "info";
+        const rankColor = pickColorForRank("issue", sev);
+        const linkColor = pickColorForLink("issue", sev);
+
+        const rankSet = new Set();
+        const linkMap = new Map();
+
+        const ranks = Array.isArray(issue.ranks) ? issue.ranks : [];
+        ranks.forEach(rank => {
+            if (rank != null) rankSet.add(rank);
+        });
+
+        // Fallback: some issues encode a single spatial target in metrics.
+        if (issue.metrics && Number.isInteger(issue.metrics.root)) {
+            rankSet.add(issue.metrics.root);
+        }
+
+        const pairs = Array.isArray(issue.pairs) ? issue.pairs : [];
+        pairs.forEach(pair => {
+            if (Array.isArray(pair) && pair.length === 2 && pair[0] != null && pair[1] != null) {
+                linkMap.set(`${pair[0]}->${pair[1]}`, {
+                    sender: pair[0],
+                    receiver: pair[1],
+                    kind: "issue",
+                    color: linkColor,
+                    priority: priorityForLinkKind("issue", sev),
+                    reason: issue.type || "issue",
+                    bytes: 0
+                });
+            }
+        });
+
+        if (
+            issue.metrics &&
+            Number.isInteger(issue.metrics.sender) &&
+            Number.isInteger(issue.metrics.receiver)
+        ) {
+            const k = `${issue.metrics.sender}->${issue.metrics.receiver}`;
+            if (!linkMap.has(k)) {
+                linkMap.set(k, {
+                    sender: issue.metrics.sender,
+                    receiver: issue.metrics.receiver,
+                    kind: "issue",
+                    color: linkColor,
+                    priority: priorityForLinkKind("issue", sev),
+                    reason: issue.type || "issue",
+                    bytes: issue.metrics.bytes || 0
+                });
+            }
+        }
+
+        return {
+            ranks: Array.from(rankSet).map(rank => ({
+                rank,
+                kind: "issue",
+                color: rankColor,
+                priority: priorityForRankKind("issue", sev),
+                reasons: [issue.type || "issue"]
+            })),
+            links: Array.from(linkMap.values())
+        };
+    }
+
     function getRankWorldPosition(rankId) {
         const r = rankMap.get(rankId);
         if (!r || !r.nodeGroup) return null;
@@ -495,7 +612,7 @@
             options = Object.assign({}, options, customOptions);
         }
 
-        clear();
+        clearObjectsOnly();
 
         if (!options.enabled || !hasCoreGlobals() || !parsedData || !parsedData.analysis) {
             return;
@@ -503,10 +620,20 @@
 
         const analysis = parsedData.analysis;
 
-        const rankHighlights = collectRankHighlights(analysis);
+        let rankHighlights = [];
+        let linkHighlights = [];
+
+        if (focusedIssueIndex != null) {
+            const focused = collectFocusedIssueHighlights(analysis, focusedIssueIndex);
+            rankHighlights = focused.ranks;
+            linkHighlights = focused.links;
+        } else {
+            rankHighlights = collectRankHighlights(analysis);
+            linkHighlights = collectLinkHighlights(analysis);
+        }
+
         rankHighlights.forEach(createRankHalo);
 
-        const linkHighlights = collectLinkHighlights(analysis);
         const maxLinkBytes = Math.max(...linkHighlights.map(l => l.bytes || 0), 1);
         linkHighlights.forEach(link => createLinkHighlight(link, maxLinkBytes));
     }
@@ -557,8 +684,10 @@
         clear,
         setEnabled,
         configure: mergeOptions,
-        getConfig
+        getConfig,
+        getFocusedIssueIndex,
+        focusIssue,
+        clearFocus
     };
-
 })();
 
