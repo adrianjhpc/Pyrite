@@ -750,11 +750,21 @@ static int read_memory_hwm_kb(int *memory_used_kb) {
     return -1;
 }
 
+
 static int fortran_status_is_ignore(MPI_Fint *status) {
 #ifdef MPI_F_STATUS_IGNORE
     return (status == MPI_F_STATUS_IGNORE);
 #else
     (void)status;
+    return 0;
+#endif
+}
+
+static int fortran_statuses_are_ignore(MPI_Fint *statuses) {
+#ifdef MPI_F_STATUSES_IGNORE
+    return (statuses == MPI_F_STATUSES_IGNORE);
+#else
+    (void)statuses;
     return 0;
 #endif
 }
@@ -888,6 +898,796 @@ void MPI_RECV(void *buf,
               MPI_Fint *ierr) {
     mpi_recv_(buf, count, datatype, source, tag, comm, status, ierr);
 }
+
+void mpi_isend_(const void *buf,
+                MPI_Fint *count,
+                MPI_Fint *datatype,
+                MPI_Fint *dest,
+                MPI_Fint *tag,
+                MPI_Fint *comm,
+                MPI_Fint *request,
+                MPI_Fint *ierr) {
+    MPI_Datatype c_datatype = PMPI_Type_f2c(*datatype);
+    MPI_Comm c_comm = PMPI_Comm_f2c(*comm);
+    MPI_Request c_request = MPI_REQUEST_NULL;
+
+    *ierr = (MPI_Fint)MPI_Isend(buf,
+                                (int)*count,
+                                c_datatype,
+                                (int)*dest,
+                                (int)*tag,
+                                c_comm,
+                                &c_request);
+
+    if (request != NULL) {
+        *request = PMPI_Request_c2f(c_request);
+    }
+}
+
+void mpi_isend__(const void *buf,
+                 MPI_Fint *count,
+                 MPI_Fint *datatype,
+                 MPI_Fint *dest,
+                 MPI_Fint *tag,
+                 MPI_Fint *comm,
+                 MPI_Fint *request,
+                 MPI_Fint *ierr) {
+    mpi_isend_(buf, count, datatype, dest, tag, comm, request, ierr);
+}
+
+void MPI_ISEND(const void *buf,
+               MPI_Fint *count,
+               MPI_Fint *datatype,
+               MPI_Fint *dest,
+               MPI_Fint *tag,
+               MPI_Fint *comm,
+               MPI_Fint *request,
+               MPI_Fint *ierr) {
+    mpi_isend_(buf, count, datatype, dest, tag, comm, request, ierr);
+}
+
+
+void mpi_ibsend_(const void *buf,
+                 MPI_Fint *count,
+                 MPI_Fint *datatype,
+                 MPI_Fint *dest,
+                 MPI_Fint *tag,
+                 MPI_Fint *comm,
+                 MPI_Fint *request,
+                 MPI_Fint *ierr) {
+    MPI_Datatype c_datatype = PMPI_Type_f2c(*datatype);
+    MPI_Comm c_comm = PMPI_Comm_f2c(*comm);
+    MPI_Request c_request = MPI_REQUEST_NULL;
+
+    *ierr = (MPI_Fint)MPI_Ibsend(buf,
+                                 (int)*count,
+                                 c_datatype,
+                                 (int)*dest,
+                                 (int)*tag,
+                                 c_comm,
+                                 &c_request);
+
+    if (request != NULL) {
+        *request = PMPI_Request_c2f(c_request);
+    }
+}
+
+void mpi_ibsend__(const void *buf,
+                  MPI_Fint *count,
+                  MPI_Fint *datatype,
+                  MPI_Fint *dest,
+                  MPI_Fint *tag,
+                  MPI_Fint *comm,
+                  MPI_Fint *request,
+                  MPI_Fint *ierr) {
+    mpi_ibsend_(buf, count, datatype, dest, tag, comm, request, ierr);
+}
+
+void MPI_IBSEND(const void *buf,
+                MPI_Fint *count,
+                MPI_Fint *datatype,
+                MPI_Fint *dest,
+                MPI_Fint *tag,
+                MPI_Fint *comm,
+                MPI_Fint *request,
+                MPI_Fint *ierr) {
+    mpi_ibsend_(buf, count, datatype, dest, tag, comm, request, ierr);
+}
+
+
+void mpi_issend_(const void *buf,
+                 MPI_Fint *count,
+                 MPI_Fint *datatype,
+                 MPI_Fint *dest,
+                 MPI_Fint *tag,
+                 MPI_Fint *comm,
+                 MPI_Fint *request,
+                 MPI_Fint *ierr) {
+    MPI_Datatype c_datatype = PMPI_Type_f2c(*datatype);
+    MPI_Comm c_comm = PMPI_Comm_f2c(*comm);
+    MPI_Request c_request = MPI_REQUEST_NULL;
+
+    *ierr = (MPI_Fint)MPI_Issend(buf,
+                                 (int)*count,
+                                 c_datatype,
+                                 (int)*dest,
+                                 (int)*tag,
+                                 c_comm,
+                                 &c_request);
+
+    if (request != NULL) {
+        *request = PMPI_Request_c2f(c_request);
+    }
+}
+
+void mpi_issend__(const void *buf,
+                  MPI_Fint *count,
+                  MPI_Fint *datatype,
+                  MPI_Fint *dest,
+                  MPI_Fint *tag,
+                  MPI_Fint *comm,
+                  MPI_Fint *request,
+                  MPI_Fint *ierr) {
+    mpi_issend_(buf, count, datatype, dest, tag, comm, request, ierr);
+}
+
+void MPI_ISSEND(const void *buf,
+                MPI_Fint *count,
+                MPI_Fint *datatype,
+                MPI_Fint *dest,
+                MPI_Fint *tag,
+                MPI_Fint *comm,
+                MPI_Fint *request,
+                MPI_Fint *ierr) {
+    mpi_issend_(buf, count, datatype, dest, tag, comm, request, ierr);
+}
+
+
+void mpi_irsend_(const void *buf,
+                 MPI_Fint *count,
+                 MPI_Fint *datatype,
+                 MPI_Fint *dest,
+                 MPI_Fint *tag,
+                 MPI_Fint *comm,
+                 MPI_Fint *request,
+                 MPI_Fint *ierr) {
+    MPI_Datatype c_datatype = PMPI_Type_f2c(*datatype);
+    MPI_Comm c_comm = PMPI_Comm_f2c(*comm);
+    MPI_Request c_request = MPI_REQUEST_NULL;
+
+    *ierr = (MPI_Fint)MPI_Irsend(buf,
+                                 (int)*count,
+                                 c_datatype,
+                                 (int)*dest,
+                                 (int)*tag,
+                                 c_comm,
+                                 &c_request);
+
+    if (request != NULL) {
+        *request = PMPI_Request_c2f(c_request);
+    }
+}
+
+void mpi_irsend__(const void *buf,
+                  MPI_Fint *count,
+                  MPI_Fint *datatype,
+                  MPI_Fint *dest,
+                  MPI_Fint *tag,
+                  MPI_Fint *comm,
+                  MPI_Fint *request,
+                  MPI_Fint *ierr) {
+    mpi_irsend_(buf, count, datatype, dest, tag, comm, request, ierr);
+}
+
+void MPI_IRSEND(const void *buf,
+                MPI_Fint *count,
+                MPI_Fint *datatype,
+                MPI_Fint *dest,
+                MPI_Fint *tag,
+                MPI_Fint *comm,
+                MPI_Fint *request,
+                MPI_Fint *ierr) {
+    mpi_irsend_(buf, count, datatype, dest, tag, comm, request, ierr);
+}
+
+
+void mpi_irecv_(void *buf,
+                MPI_Fint *count,
+                MPI_Fint *datatype,
+                MPI_Fint *source,
+                MPI_Fint *tag,
+                MPI_Fint *comm,
+                MPI_Fint *request,
+                MPI_Fint *ierr) {
+    MPI_Datatype c_datatype = PMPI_Type_f2c(*datatype);
+    MPI_Comm c_comm = PMPI_Comm_f2c(*comm);
+    MPI_Request c_request = MPI_REQUEST_NULL;
+
+    *ierr = (MPI_Fint)MPI_Irecv(buf,
+                                (int)*count,
+                                c_datatype,
+                                (int)*source,
+                                (int)*tag,
+                                c_comm,
+                                &c_request);
+
+    if (request != NULL) {
+        *request = PMPI_Request_c2f(c_request);
+    }
+}
+
+void mpi_irecv__(void *buf,
+                 MPI_Fint *count,
+                 MPI_Fint *datatype,
+                 MPI_Fint *source,
+                 MPI_Fint *tag,
+                 MPI_Fint *comm,
+                 MPI_Fint *request,
+                 MPI_Fint *ierr) {
+    mpi_irecv_(buf, count, datatype, source, tag, comm, request, ierr);
+}
+
+void MPI_IRECV(void *buf,
+               MPI_Fint *count,
+               MPI_Fint *datatype,
+               MPI_Fint *source,
+               MPI_Fint *tag,
+               MPI_Fint *comm,
+               MPI_Fint *request,
+               MPI_Fint *ierr) {
+    mpi_irecv_(buf, count, datatype, source, tag, comm, request, ierr);
+}
+
+
+void mpi_wait_(MPI_Fint *request,
+               MPI_Fint *status,
+               MPI_Fint *ierr) {
+    MPI_Request c_request = MPI_REQUEST_NULL;
+    MPI_Status c_status;
+    MPI_Status *c_status_ptr = MPI_STATUS_IGNORE;
+
+    if (request != NULL) {
+        c_request = PMPI_Request_f2c(*request);
+    }
+
+    if (status != NULL && !fortran_status_is_ignore(status)) {
+        c_status_ptr = &c_status;
+    }
+
+    *ierr = (MPI_Fint)MPI_Wait(&c_request, c_status_ptr);
+
+    if (request != NULL) {
+        *request = PMPI_Request_c2f(c_request);
+    }
+
+    if (c_status_ptr != MPI_STATUS_IGNORE && status != NULL) {
+        PMPI_Status_c2f(&c_status, status);
+    }
+}
+
+void mpi_wait__(MPI_Fint *request,
+                MPI_Fint *status,
+                MPI_Fint *ierr) {
+    mpi_wait_(request, status, ierr);
+}
+
+void MPI_WAIT(MPI_Fint *request,
+              MPI_Fint *status,
+              MPI_Fint *ierr) {
+    mpi_wait_(request, status, ierr);
+}
+
+
+void mpi_waitall_(MPI_Fint *count,
+                  MPI_Fint array_of_requests[],
+                  MPI_Fint array_of_statuses[],
+                  MPI_Fint *ierr) {
+    int i;
+    int n = (int)*count;
+    MPI_Request *c_requests = NULL;
+    MPI_Status *c_statuses = NULL;
+    MPI_Status *c_status_ptr = MPI_STATUSES_IGNORE;
+
+    if (n > 0) {
+        c_requests = (MPI_Request *)malloc((size_t)n * sizeof(MPI_Request));
+        if (c_requests == NULL) {
+            *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+            return;
+        }
+
+        for (i = 0; i < n; i++) {
+            c_requests[i] = PMPI_Request_f2c(array_of_requests[i]);
+        }
+
+        if (array_of_statuses != NULL && !fortran_statuses_are_ignore(array_of_statuses)) {
+            c_statuses = (MPI_Status *)malloc((size_t)n * sizeof(MPI_Status));
+            if (c_statuses == NULL) {
+                free(c_requests);
+                *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+                return;
+            }
+            c_status_ptr = c_statuses;
+        }
+    }
+
+    *ierr = (MPI_Fint)MPI_Waitall(n, c_requests, c_status_ptr);
+
+    if (n > 0) {
+        for (i = 0; i < n; i++) {
+            array_of_requests[i] = PMPI_Request_c2f(c_requests[i]);
+        }
+
+        if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
+            for (i = 0; i < n; i++) {
+                PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i]);
+            }
+        }
+    }
+
+    free(c_requests);
+    free(c_statuses);
+}
+
+void mpi_waitall__(MPI_Fint *count,
+                   MPI_Fint array_of_requests[],
+                   MPI_Fint array_of_statuses[],
+                   MPI_Fint *ierr) {
+    mpi_waitall_(count, array_of_requests, array_of_statuses, ierr);
+}
+
+void MPI_WAITALL(MPI_Fint *count,
+                 MPI_Fint array_of_requests[],
+                 MPI_Fint array_of_statuses[],
+                 MPI_Fint *ierr) {
+    mpi_waitall_(count, array_of_requests, array_of_statuses, ierr);
+}
+
+
+void mpi_waitany_(MPI_Fint *count,
+                  MPI_Fint array_of_requests[],
+                  MPI_Fint *index,
+                  MPI_Fint *status,
+                  MPI_Fint *ierr) {
+    int i;
+    int n = (int)*count;
+    int c_index = MPI_UNDEFINED;
+    MPI_Request *c_requests = NULL;
+    MPI_Status c_status;
+    MPI_Status *c_status_ptr = MPI_STATUS_IGNORE;
+
+    if (n > 0) {
+        c_requests = (MPI_Request *)malloc((size_t)n * sizeof(MPI_Request));
+        if (c_requests == NULL) {
+            *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+            return;
+        }
+
+        for (i = 0; i < n; i++) {
+            c_requests[i] = PMPI_Request_f2c(array_of_requests[i]);
+        }
+    }
+
+    if (status != NULL && !fortran_status_is_ignore(status)) {
+        c_status_ptr = &c_status;
+    }
+
+    *ierr = (MPI_Fint)MPI_Waitany(n, c_requests, &c_index, c_status_ptr);
+
+    if (n > 0) {
+        for (i = 0; i < n; i++) {
+            array_of_requests[i] = PMPI_Request_c2f(c_requests[i]);
+        }
+    }
+
+    if (index != NULL) {
+        if (c_index == MPI_UNDEFINED) {
+            *index = (MPI_Fint)MPI_UNDEFINED;
+        } else {
+            *index = (MPI_Fint)(c_index + 1);
+        }
+    }
+
+    if (c_status_ptr != MPI_STATUS_IGNORE && status != NULL && c_index != MPI_UNDEFINED) {
+        PMPI_Status_c2f(&c_status, status);
+    }
+
+    free(c_requests);
+}
+
+void mpi_waitany__(MPI_Fint *count,
+                   MPI_Fint array_of_requests[],
+                   MPI_Fint *index,
+                   MPI_Fint *status,
+                   MPI_Fint *ierr) {
+    mpi_waitany_(count, array_of_requests, index, status, ierr);
+}
+
+void MPI_WAITANY(MPI_Fint *count,
+                 MPI_Fint array_of_requests[],
+                 MPI_Fint *index,
+                 MPI_Fint *status,
+                 MPI_Fint *ierr) {
+    mpi_waitany_(count, array_of_requests, index, status, ierr);
+}
+
+
+void mpi_waitsome_(MPI_Fint *incount,
+                   MPI_Fint array_of_requests[],
+                   MPI_Fint *outcount,
+                   MPI_Fint array_of_indices[],
+                   MPI_Fint array_of_statuses[],
+                   MPI_Fint *ierr) {
+    int i;
+    int n = (int)*incount;
+    int c_outcount = MPI_UNDEFINED;
+    MPI_Request *c_requests = NULL;
+    int *c_indices = NULL;
+    MPI_Status *c_statuses = NULL;
+    MPI_Status *c_status_ptr = MPI_STATUSES_IGNORE;
+
+    if (n > 0) {
+        c_requests = (MPI_Request *)malloc((size_t)n * sizeof(MPI_Request));
+        c_indices = (int *)malloc((size_t)n * sizeof(int));
+
+        if (c_requests == NULL || c_indices == NULL) {
+            free(c_requests);
+            free(c_indices);
+            *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+            return;
+        }
+
+        for (i = 0; i < n; i++) {
+            c_requests[i] = PMPI_Request_f2c(array_of_requests[i]);
+        }
+
+        if (array_of_statuses != NULL && !fortran_statuses_are_ignore(array_of_statuses)) {
+            c_statuses = (MPI_Status *)malloc((size_t)n * sizeof(MPI_Status));
+            if (c_statuses == NULL) {
+                free(c_requests);
+                free(c_indices);
+                *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+                return;
+            }
+            c_status_ptr = c_statuses;
+        }
+    }
+
+    *ierr = (MPI_Fint)MPI_Waitsome(n, c_requests, &c_outcount, c_indices, c_status_ptr);
+
+    if (n > 0) {
+        for (i = 0; i < n; i++) {
+            array_of_requests[i] = PMPI_Request_c2f(c_requests[i]);
+        }
+    }
+
+    if (outcount != NULL) {
+        *outcount = (MPI_Fint)c_outcount;
+    }
+
+    if (c_outcount != MPI_UNDEFINED && c_outcount > 0) {
+        for (i = 0; i < c_outcount; i++) {
+            if (array_of_indices != NULL) {
+                array_of_indices[i] = (MPI_Fint)(c_indices[i] + 1);
+            }
+
+            if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
+                PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i]);
+            }
+        }
+    }
+
+    free(c_requests);
+    free(c_indices);
+    free(c_statuses);
+}
+
+void mpi_waitsome__(MPI_Fint *incount,
+                    MPI_Fint array_of_requests[],
+                    MPI_Fint *outcount,
+                    MPI_Fint array_of_indices[],
+                    MPI_Fint array_of_statuses[],
+                    MPI_Fint *ierr) {
+    mpi_waitsome_(incount, array_of_requests, outcount, array_of_indices, array_of_statuses, ierr);
+}
+
+void MPI_WAITSOME(MPI_Fint *incount,
+                  MPI_Fint array_of_requests[],
+                  MPI_Fint *outcount,
+                  MPI_Fint array_of_indices[],
+                  MPI_Fint array_of_statuses[],
+                  MPI_Fint *ierr) {
+    mpi_waitsome_(incount, array_of_requests, outcount, array_of_indices, array_of_statuses, ierr);
+}
+
+
+/*
+ *   For the legacy Fortran interface, LOGICAL is typically represented as a C int
+ *     by the MPI implementation ABI. These wrappers follow that common convention.
+ *     */
+void mpi_test_(MPI_Fint *request,
+               int *flag,
+               MPI_Fint *status,
+               MPI_Fint *ierr) {
+    MPI_Request c_request = MPI_REQUEST_NULL;
+    MPI_Status c_status;
+    MPI_Status *c_status_ptr = MPI_STATUS_IGNORE;
+    int c_flag = 0;
+
+    if (request != NULL) {
+        c_request = PMPI_Request_f2c(*request);
+    }
+
+    if (status != NULL && !fortran_status_is_ignore(status)) {
+        c_status_ptr = &c_status;
+    }
+
+    *ierr = (MPI_Fint)MPI_Test(&c_request, &c_flag, c_status_ptr);
+
+    if (request != NULL) {
+        *request = PMPI_Request_c2f(c_request);
+    }
+
+    if (flag != NULL) {
+        *flag = c_flag;
+    }
+
+    if (c_flag && c_status_ptr != MPI_STATUS_IGNORE && status != NULL) {
+        PMPI_Status_c2f(&c_status, status);
+    }
+}
+
+void mpi_test__(MPI_Fint *request,
+                int *flag,
+                MPI_Fint *status,
+                MPI_Fint *ierr) {
+    mpi_test_(request, flag, status, ierr);
+}
+
+void MPI_TEST(MPI_Fint *request,
+              int *flag,
+              MPI_Fint *status,
+              MPI_Fint *ierr) {
+    mpi_test_(request, flag, status, ierr);
+}
+
+
+void mpi_testall_(MPI_Fint *count,
+                  MPI_Fint array_of_requests[],
+                  int *flag,
+                  MPI_Fint array_of_statuses[],
+                  MPI_Fint *ierr) {
+    int i;
+    int n = (int)*count;
+    int c_flag = 0;
+    MPI_Request *c_requests = NULL;
+    MPI_Status *c_statuses = NULL;
+    MPI_Status *c_status_ptr = MPI_STATUSES_IGNORE;
+
+    if (n > 0) {
+        c_requests = (MPI_Request *)malloc((size_t)n * sizeof(MPI_Request));
+        if (c_requests == NULL) {
+            *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+            return;
+        }
+
+        for (i = 0; i < n; i++) {
+            c_requests[i] = PMPI_Request_f2c(array_of_requests[i]);
+        }
+
+        if (array_of_statuses != NULL && !fortran_statuses_are_ignore(array_of_statuses)) {
+            c_statuses = (MPI_Status *)malloc((size_t)n * sizeof(MPI_Status));
+            if (c_statuses == NULL) {
+                free(c_requests);
+                *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+                return;
+            }
+            c_status_ptr = c_statuses;
+        }
+    }
+
+    *ierr = (MPI_Fint)MPI_Testall(n, c_requests, &c_flag, c_status_ptr);
+
+    if (n > 0) {
+        for (i = 0; i < n; i++) {
+            array_of_requests[i] = PMPI_Request_c2f(c_requests[i]);
+        }
+    }
+
+    if (flag != NULL) {
+        *flag = c_flag;
+    }
+
+    if (c_flag && c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
+        for (i = 0; i < n; i++) {
+            PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i]);
+        }
+    }
+
+    free(c_requests);
+    free(c_statuses);
+}
+
+void mpi_testall__(MPI_Fint *count,
+                   MPI_Fint array_of_requests[],
+                   int *flag,
+                   MPI_Fint array_of_statuses[],
+                   MPI_Fint *ierr) {
+    mpi_testall_(count, array_of_requests, flag, array_of_statuses, ierr);
+}
+
+void MPI_TESTALL(MPI_Fint *count,
+                 MPI_Fint array_of_requests[],
+                 int *flag,
+                 MPI_Fint array_of_statuses[],
+                 MPI_Fint *ierr) {
+    mpi_testall_(count, array_of_requests, flag, array_of_statuses, ierr);
+}
+
+
+void mpi_testany_(MPI_Fint *count,
+                  MPI_Fint array_of_requests[],
+                  MPI_Fint *index,
+                  int *flag,
+                  MPI_Fint *status,
+                  MPI_Fint *ierr) {
+    int i;
+    int n = (int)*count;
+    int c_index = MPI_UNDEFINED;
+    int c_flag = 0;
+    MPI_Request *c_requests = NULL;
+    MPI_Status c_status;
+    MPI_Status *c_status_ptr = MPI_STATUS_IGNORE;
+
+    if (n > 0) {
+        c_requests = (MPI_Request *)malloc((size_t)n * sizeof(MPI_Request));
+        if (c_requests == NULL) {
+            *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+            return;
+        }
+
+        for (i = 0; i < n; i++) {
+            c_requests[i] = PMPI_Request_f2c(array_of_requests[i]);
+        }
+    }
+
+    if (status != NULL && !fortran_status_is_ignore(status)) {
+        c_status_ptr = &c_status;
+    }
+
+    *ierr = (MPI_Fint)MPI_Testany(n, c_requests, &c_index, &c_flag, c_status_ptr);
+
+    if (n > 0) {
+        for (i = 0; i < n; i++) {
+            array_of_requests[i] = PMPI_Request_c2f(c_requests[i]);
+        }
+    }
+
+    if (flag != NULL) {
+        *flag = c_flag;
+    }
+
+    if (index != NULL) {
+        if (c_index == MPI_UNDEFINED) {
+            *index = (MPI_Fint)MPI_UNDEFINED;
+        } else {
+            *index = (MPI_Fint)(c_index + 1);
+        }
+    }
+
+    if (c_flag && c_status_ptr != MPI_STATUS_IGNORE && status != NULL && c_index != MPI_UNDEFINED) {
+        PMPI_Status_c2f(&c_status, status);
+    }
+
+    free(c_requests);
+}
+
+void mpi_testany__(MPI_Fint *count,
+                   MPI_Fint array_of_requests[],
+                   MPI_Fint *index,
+                   int *flag,
+                   MPI_Fint *status,
+                   MPI_Fint *ierr) {
+    mpi_testany_(count, array_of_requests, index, flag, status, ierr);
+}
+
+void MPI_TESTANY(MPI_Fint *count,
+                 MPI_Fint array_of_requests[],
+                 MPI_Fint *index,
+                 int *flag,
+                 MPI_Fint *status,
+                 MPI_Fint *ierr) {
+    mpi_testany_(count, array_of_requests, index, flag, status, ierr);
+}
+
+
+void mpi_testsome_(MPI_Fint *incount,
+                   MPI_Fint array_of_requests[],
+                   MPI_Fint *outcount,
+                   MPI_Fint array_of_indices[],
+                   MPI_Fint array_of_statuses[],
+                   MPI_Fint *ierr) {
+    int i;
+    int n = (int)*incount;
+    int c_outcount = MPI_UNDEFINED;
+    MPI_Request *c_requests = NULL;
+    int *c_indices = NULL;
+    MPI_Status *c_statuses = NULL;
+    MPI_Status *c_status_ptr = MPI_STATUSES_IGNORE;
+
+    if (n > 0) {
+        c_requests = (MPI_Request *)malloc((size_t)n * sizeof(MPI_Request));
+        c_indices = (int *)malloc((size_t)n * sizeof(int));
+
+        if (c_requests == NULL || c_indices == NULL) {
+            free(c_requests);
+            free(c_indices);
+            *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+            return;
+        }
+
+        for (i = 0; i < n; i++) {
+            c_requests[i] = PMPI_Request_f2c(array_of_requests[i]);
+        }
+
+        if (array_of_statuses != NULL && !fortran_statuses_are_ignore(array_of_statuses)) {
+            c_statuses = (MPI_Status *)malloc((size_t)n * sizeof(MPI_Status));
+            if (c_statuses == NULL) {
+                free(c_requests);
+                free(c_indices);
+                *ierr = (MPI_Fint)MPI_ERR_NO_MEM;
+                return;
+            }
+            c_status_ptr = c_statuses;
+        }
+    }
+
+    *ierr = (MPI_Fint)MPI_Testsome(n, c_requests, &c_outcount, c_indices, c_status_ptr);
+
+    if (n > 0) {
+        for (i = 0; i < n; i++) {
+            array_of_requests[i] = PMPI_Request_c2f(c_requests[i]);
+        }
+    }
+
+    if (outcount != NULL) {
+        *outcount = (MPI_Fint)c_outcount;
+    }
+
+    if (c_outcount != MPI_UNDEFINED && c_outcount > 0) {
+        for (i = 0; i < c_outcount; i++) {
+            if (array_of_indices != NULL) {
+                array_of_indices[i] = (MPI_Fint)(c_indices[i] + 1);
+            }
+
+            if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
+                PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i]);
+            }
+        }
+    }
+
+    free(c_requests);
+    free(c_indices);
+    free(c_statuses);
+}
+
+void mpi_testsome__(MPI_Fint *incount,
+                    MPI_Fint array_of_requests[],
+                    MPI_Fint *outcount,
+                    MPI_Fint array_of_indices[],
+                    MPI_Fint array_of_statuses[],
+                    MPI_Fint *ierr) {
+    mpi_testsome_(incount, array_of_requests, outcount, array_of_indices, array_of_statuses, ierr);
+}
+
+void MPI_TESTSOME(MPI_Fint *incount,
+                  MPI_Fint array_of_requests[],
+                  MPI_Fint *outcount,
+                  MPI_Fint array_of_indices[],
+                  MPI_Fint array_of_statuses[],
+                  MPI_Fint *ierr) {
+    mpi_testsome_(incount, array_of_requests, outcount, array_of_indices, array_of_statuses, ierr);
+}
+
 
 /* -------------------------------------------------------------------------- */
 /* Init / Finalize                                                            */
