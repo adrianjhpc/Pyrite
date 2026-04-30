@@ -112,11 +112,9 @@ The library writes two record classes:
 - `MPI_Scatter`
 - `MPI_Allgather`
 
-### 3.5 Nonblocking tracking (v2)
+### 3.5 Nonblocking tracking 
 
-The v2 interceptor tracks pending requests internally.
-
-Instead of logging nonblocking communication only at posting time, it:
+The interceptor also tracks pending non-blocking requests internally. Instead of logging nonblocking communication only at posting time, it:
 
 - records request metadata on `MPI_Isend`, `MPI_Irecv`, etc.
 - resolves requests on:
@@ -142,7 +140,7 @@ The library also includes symbol-level Fortran wrappers, primarily intended for:
 - `mpif.h`
 - many `use mpi` implementations
 
-Coverage includes nonblocking completions and request-handling routines, but it is not intended as a full portable `mpi_f08` interception layer.
+Coverage includes non-blocking completions and request-handling routines, but it is not intended as a full portable `mpi_f08` interception layer yet.
 
 ---
 
@@ -182,15 +180,17 @@ For each rank:
 
 ### 4.4 Parser strategy
 
-`tools/parse_mpic.py` now prefers:
+To process a trace file we provide a tool; `tools/mpi_data_parser.py`, which is designed to try and parse the file as created, but can also deal with malformed or truncated files, using the following approach:
 
 1. **strict parsing**
-   - trusts section counts
+   - trusts section counts from the trace file
    - detects malformed structure early
 
 2. **salvage parsing**
    - scans for section anchors
    - useful for partially damaged files
+
+This is provided to try and enable some profile/tracing data to be analysed if in a program run fails to complete successfully, but the primary mode of working requires a correctly formed trace file.
 
 ---
 
@@ -198,7 +198,7 @@ For each rank:
 
 ### 5.1 Purpose
 
-`tools/parse_mpic.py` converts `.mpic` into `.mpix` and extracts a browser-friendly analysis layer.
+`tools/mpi_data_parser.py` converts `.mpic` into `.mpix` and creates a visualisation-friendly analysis layer.
 
 ### 5.2 Outputs
 
@@ -213,8 +213,7 @@ The parser emits a compressed `.mpix` container with:
 
 ### 5.3 Timeline chunking
 
-The timeline is split into fixed-size event chunks and compressed with zlib.  
-The browser later loads only the chunks needed for the current time window.
+The timeline is split into fixed-size event chunks and compressed with zlib.  This allows the visualisation tool to only loads only the chunks needed for the current time window, enabling large traces to be visualised without requiring the full data to be in memory at the same time.
 
 ---
 
@@ -499,7 +498,7 @@ Common extension points in `src/` include:
 
 ## 14. Extending the Parser
 
-Common extensions in `tools/parse_mpic.py`:
+Common extensions in `tools/mpi_data_parser.py`:
 
 ### Add new MPI message types
 - extend `MESSAGE_TYPES`
@@ -549,17 +548,19 @@ Use `analytics-controls.js` and wire them to `Analytics3D.configure(...)`.
 
 ---
 
-## 17. Suggested Future Work
+## 17. Potential Future Work
 
 Potential next improvements include:
 
-- persistent request tracking
-- communicator id/versioning in the trace format
-- richer phase segmentation
-- stronger stencil / halo detection
-- direct export of issues/patterns as CSV/JSON
-- full visual linking between issue cards and relevant time windows
-- more browser-side filtering and comparison tools
+- Network link identification and visualisation
+- Supporting GPU-aware MPI communications and visualisation
+- Persistent request tracking
+- Communicator id/versioning in the trace format
+- Richer phase segmentation
+- Stronger stencil / halo detection
+- Direct export of issues/patterns as CSV/JSON
+- Full visual linking between issue cards and relevant time windows
+- More browser-side filtering and comparison tools
 
 ---
 
@@ -592,7 +593,7 @@ python tools/parse_mpic.py your_mpi_application-YYYYMMDDHHMMSS.mpic hardware_map
 When changing one layer, remember the others:
 
 - **interceptor change**  
-  usually implies parser + frontend + tests updates
+  usually implies parser and frontend and tests updates
 
 - **parser analytics change**  
   may imply analytics panel and analytics 3D updates
