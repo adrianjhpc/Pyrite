@@ -235,7 +235,7 @@ cmake -S . -B build -DMPI_TRACE_FORTRAN_TESTS=OFF
 
 ## Documentation
 
-For internal details, trace format notes, parser behaviour, frontend module layout, analytics overlays, testing, and extension guidance, see [docs/developer-guide.md]
+For internal details, trace format notes, parser behaviour, frontend module layout, analytics overlays, testing, and extension guidance, see (docs/developer-guide.md)[docs/developer-guide.md]
 
 ## Authors
 This has been developed by Adrian Jackson.
