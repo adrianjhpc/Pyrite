@@ -225,11 +225,11 @@ cmake -S . -B build -DMPI_TRACE_FORTRAN_TESTS=OFF
 
 ## Limitations
 
-- communicator identity is not yet stored explicitly in the trace format
-- some collective behaviour is approximated
-- analytics are heuristic, not proof
-- persistent MPI requests are not yet fully modelled
-- heavy `MPI_THREAD_MULTIPLE` usage is not fully hardened
+- Communicator identity is not yet stored explicitly in the trace format, meaning we only record global ranks for communications and do not differentiate between communicators
+- Some collective behaviour is approximated in the visualisation to make it visible 
+- The analytic functionality is currently based on heuristic approaches, not formal proof based functionality
+- Persistent MPI requests are not yet fully modelled
+- Thread safety/heavy `MPI_THREAD_MULTIPLE` usage is not yet tested or ensured
 
 ---
 
@@ -240,6 +240,9 @@ For internal details, trace format notes, parser behaviour, frontend module layo
 ```text
 docs/developer-guide.md
 ```
+
+## Authors
+This has been developed by Adrian Jackson.
 
 ## License
 
