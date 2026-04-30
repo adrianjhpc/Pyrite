@@ -1,6 +1,6 @@
 # Developer Guide
 
-This document describes the internal structure of the MPI Communication Tracker and 3D Hardware Visualiser, including the interceptor library, parser, analytics pipeline, frontend architecture, and test suite.
+This document describes the internal structure of the MPI communication tracer, trace consumer, analytics functionality, and visualisation functionality. This includes the interceptor library, parser, analytics pipeline, frontend display architecture, and test suite.
 
 ---
 
