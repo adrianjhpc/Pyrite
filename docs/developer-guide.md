@@ -12,7 +12,7 @@ The project has three main runtime stages:
    - PMPI wrappers record MPI activity to a binary `.mpic` trace.
 
 2. **Parsing and analysis**
-   - `tools/parse_mpic.py` converts `.mpic` into `.mpix`.
+   - `tools/mpi_data_parser.py` converts `.mpic` into `.mpix`.
    - It also extracts summary analytics and heuristic performance findings.
 
 3. **Frontend visualisation**
