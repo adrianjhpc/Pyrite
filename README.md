@@ -32,9 +32,9 @@ mpi-comm-tracker/
 │   ├── mpi_communication_tracking.c
 │   └── mpi_communication_tracking.h
 ├── tools/
-│   ├── parse_mpic.py
-│   ├── generate_topology.py
-│   └── slurm_topology.py
+│   ├── mpi_data_parser.py
+│   ├── topology_generator.py
+│   └── slurm_topology_generator.py
 ├── vis/
 │   ├── index.html
 │   ├── style.css
@@ -89,13 +89,13 @@ Optional, but recommended for meaningful 3D placement.
 
 ```bash
 scontrol show topo > my_topo.txt
-python tools/slurm_topology.py my_topo.txt --racks_per_cab 4 --out hardware_map.json
+python tools/slurm_topology_generator.py my_topo.txt --racks_per_cab 4 --out hardware_map.json
 ```
 
 #### Synthetic
 
 ```bash
-python tools/generate_topology.py \
+python tools/topology_generator.py \
   --cabinets 2 \
   --racks 2 \
   --nodes 16 \
@@ -107,7 +107,7 @@ python tools/generate_topology.py \
 ### 4. Parse and analyse the trace
 
 ```bash
-python tools/parse_mpic.py your_mpi_application-YYYYMMDDHHMMSS.mpic hardware_map.json
+python tools/mpi_data_parser.py your_mpi_application-YYYYMMDDHHMMSS.mpic hardware_map.json
 ```
 
 This creates:
