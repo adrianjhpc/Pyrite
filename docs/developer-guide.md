@@ -28,9 +28,9 @@ src/
   mpi_communication_tracking.h
 
 tools/
-  parse_mpic.py
-  generate_topology.py
-  slurm_topology.py
+  mpi_data_parser.py
+  topology_generator.py
+  slurm_topology_generator.py
 
 vis/
   index.html
