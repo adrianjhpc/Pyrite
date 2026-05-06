@@ -81,6 +81,17 @@ def require_n(records, n, **expected):
         )
     return matches
 
+def require_none(records, **expected):
+    matches = [
+        r for r in records
+        if all(r.get(k) == v for k, v in expected.items())
+    ]
+    if len(matches) != 0:
+        raise AssertionError(
+            "Expected no records matching {}, found {}\nAvailable records:\n{}".format(
+                expected, len(matches), describe_records(records)
+            )
+        )
 
 def validate_send_recv(trace):
     require(trace["world_size"] == 2, "send_recv: world size should be 2")
@@ -828,6 +839,244 @@ def validate_fortran_testall(trace):
         bytes=0,
     )
 
+def validate_fortran_bsend(trace):
+    require(trace["world_size"] == 2, "fortran_bsend: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    require_one(
+        rank0["small"],
+        message_type=MPI_BSEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_RECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+
+def validate_fortran_ssend(trace):
+    require(trace["world_size"] == 2, "fortran_ssend: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    require_one(
+        rank0["small"],
+        message_type=MPI_SSEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_RECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+
+def validate_fortran_rsend(trace):
+    require(trace["world_size"] == 2, "fortran_rsend: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    require_one(
+        rank0["small"],
+        message_type=MPI_RSEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_one(
+        rank1["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+
+def validate_fortran_barrier(trace):
+    require(trace["world_size"] == 3, "fortran_barrier: world size should be 3")
+
+    for r in range(3):
+        require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_BARRIER_TYPE,
+            sender=r,
+            receiver=r,
+            count=0,
+            bytes=0,
+        )
+
+
+def validate_fortran_bcast(trace):
+    require(trace["world_size"] == 4, "fortran_bcast: world size should be 4")
+
+    for r in range(4):
+        require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_BCAST_TYPE,
+            sender=2,
+            receiver=r,
+            count=3,
+            bytes=12,
+        )
+
+
+def validate_fortran_reduce(trace):
+    require(trace["world_size"] == 4, "fortran_reduce: world size should be 4")
+
+    for r in range(4):
+        require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_REDUCE_TYPE,
+            sender=r,
+            receiver=1,
+            count=5,
+            bytes=20,
+        )
+
+
+def validate_fortran_allreduce(trace):
+    require(trace["world_size"] == 4, "fortran_allreduce: world size should be 4")
+
+    for r in range(4):
+        require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_ALLREDUCE_TYPE,
+            sender=r,
+            receiver=r,
+            count=4,
+            bytes=16,
+        )
+
+
+def validate_fortran_gather(trace):
+    require(trace["world_size"] == 4, "fortran_gather: world size should be 4")
+
+    for r in range(4):
+        require_one(
+            trace["sections"][r]["large"],
+            message_type=MPI_GATHER_TYPE,
+            sender1=r,
+            receiver1=3,
+            count1=2,
+            bytes1=8,
+            sender2=3,
+            receiver2=3,
+            count2=(8 if r == 3 else 0),
+            bytes2=(32 if r == 3 else 0),
+        )
+
+
+def validate_fortran_scatter(trace):
+    require(trace["world_size"] == 4, "fortran_scatter: world size should be 4")
+
+    for r in range(4):
+        require_one(
+            trace["sections"][r]["large"],
+            message_type=MPI_SCATTER_TYPE,
+            sender1=0,
+            receiver1=0,
+            count1=(28 if r == 0 else 0),
+            bytes1=(112 if r == 0 else 0),
+            sender2=0,
+            receiver2=r,
+            count2=7,
+            bytes2=28,
+        )
+
+
+def validate_fortran_allgather(trace):
+    require(trace["world_size"] == 4, "fortran_allgather: world size should be 4")
+
+    for r in range(4):
+        require_one(
+            trace["sections"][r]["large"],
+            message_type=MPI_ALLGATHER_TYPE,
+            sender1=r,
+            receiver1=r,
+            count1=1,
+            bytes1=4,
+            sender2=r,
+            receiver2=r,
+            count2=4,
+            bytes2=16,
+        )
+
+
+def validate_fortran_cancel(trace):
+    require(trace["world_size"] == 2, "fortran_cancel: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    # There should be no completed Irecv data movement on rank 1 if cancellation succeeded.
+    require_none(
+        rank1["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    # Wait should still be recorded as a local completion event.
+    require_one(
+        rank1["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+    # Both ranks pass through a barrier at the end.
+    require_one(
+        rank0["small"],
+        message_type=MPI_BARRIER_TYPE,
+        sender=0,
+        receiver=0,
+        count=0,
+        bytes=0,
+    )
+    require_one(
+        rank1["small"],
+        message_type=MPI_BARRIER_TYPE,
+        sender=1,
+        receiver=1,
+        count=0,
+        bytes=0,
+    )
+
 
 VALIDATORS = {
     "send_recv": validate_send_recv,
@@ -848,6 +1097,18 @@ VALIDATORS = {
     "fortran_waitall": validate_fortran_waitall,
     "fortran_waitany": validate_fortran_waitany,
     "fortran_testall": validate_fortran_testall,
+    "fortran_bsend": validate_fortran_bsend,
+    "fortran_ssend": validate_fortran_ssend,
+    "fortran_rsend": validate_fortran_rsend,
+    "fortran_sendrecv": validate_sendrecv,
+    "fortran_barrier": validate_fortran_barrier,
+    "fortran_bcast": validate_fortran_bcast,
+    "fortran_reduce": validate_fortran_reduce,
+    "fortran_allreduce": validate_fortran_allreduce,
+    "fortran_gather": validate_fortran_gather,
+    "fortran_scatter": validate_fortran_scatter,
+    "fortran_allgather": validate_fortran_allgather,
+    "fortran_cancel": validate_fortran_cancel,
 }
 
 def main():
