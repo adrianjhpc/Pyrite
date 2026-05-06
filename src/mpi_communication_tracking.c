@@ -30,7 +30,6 @@ char tracking_datetime[DATETIME_LENGTH] = {0};
 /* -------------------------------------------------------------------------- */
 
 static int current_id = 0;
-static pid_t process_id = (pid_t)-1;
 static MPI_Group world_group = MPI_GROUP_NULL;
 static int tracking_initialized = 0;
 
@@ -379,10 +378,6 @@ int get_datetime(void) {
     return 0;
 }
 
-int get_process_id(void) {
-    process_id = getpid();
-    return 0;
-}
 
 int mpi_high_water_name_to_colour(const char *name) {
     const long long small_multiplier = 31LL;
@@ -454,7 +449,6 @@ static int begin_tracking_runtime(void) {
     tracking_start_time = PMPI_Wtime();
 
     get_program_name();
-    get_process_id();
 
     if (gethostname(tracking_hostname, sizeof(tracking_hostname)) != 0) {
         strncpy(tracking_hostname, "unknown-host", sizeof(tracking_hostname) - 1);
@@ -1285,6 +1279,67 @@ static int get_fortran_status_size(void) {
     return cached;
 }
 
+static void report_fortran_status_size_error(const char *wrapper_name, int f_status_size) {
+    static int already_reported = 0;
+
+    /*
+      Avoid spamming stderr from repeated calls. We still fail each wrapper
+      call, but only print the full diagnostic once per process.
+    */
+    if (already_reported) {
+        return;
+    }
+    already_reported = 1;
+
+    fprintf(stderr,
+            "[mpi-trace] ERROR: invalid Fortran MPI status size in %s on rank %d (%s).\n"
+            "[mpi-trace]        get_fortran_status_size() returned %d.\n"
+            "[mpi-trace]        The tracer cannot safely convert C MPI_Status values\n"
+            "[mpi-trace]        back into a Fortran status array without a valid stride.\n"
+            "[mpi-trace]        Likely causes:\n"
+            "[mpi-trace]          - the Fortran helper object was not linked\n"
+            "[mpi-trace]          - MPI Fortran support was enabled inconsistently\n"
+            "[mpi-trace]          - the MPI implementation does not expose a usable\n"
+            "[mpi-trace]            Fortran status size to this build\n",
+            wrapper_name,
+            tracking_my_rank,
+            (tracking_hostname[0] != '\0') ? tracking_hostname : "unknown-host",
+            f_status_size);
+
+    fflush(stderr);
+}
+
+static int validate_fortran_status_size(const char *wrapper_name,
+                                        int *f_status_size_out,
+                                        MPI_Fint *ierr) {
+    int f_status_size;
+
+    if (f_status_size_out == NULL) {
+        if (ierr != NULL) {
+            *ierr = (MPI_Fint)MPI_ERR_ARG;
+        }
+        fprintf(stderr,
+                "[mpi-trace] ERROR: validate_fortran_status_size called with NULL output pointer in %s.\n",
+                wrapper_name);
+        fflush(stderr);
+        return 0;
+    }
+
+    f_status_size = get_fortran_status_size();
+
+    if (f_status_size <= 0) {
+        report_fortran_status_size_error(wrapper_name, f_status_size);
+        if (ierr != NULL) {
+            *ierr = (MPI_Fint)MPI_ERR_INTERN;
+        }
+        return 0;
+    }
+
+    *f_status_size_out = f_status_size;
+    return 1;
+}
+
+
 
 /* -------------------------------------------------------------------------- */
 /* Fortran Wrappers                                                           */
@@ -1464,7 +1519,13 @@ void mpi_waitall_(MPI_Fint *count,
         }
 
         if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
-            int f_status_size = get_fortran_status_size();
+            int f_status_size = 0;
+
+            if (!validate_fortran_status_size("mpi_waitall_", &f_status_size, ierr)) {
+                free(c_requests);
+                free(c_statuses);
+                return;
+            } 
             for (i = 0; i < n; i++) {
                 PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
             }
@@ -1598,7 +1659,16 @@ void mpi_waitsome_(MPI_Fint *incount,
     }
 
     if (c_outcount != MPI_UNDEFINED && c_outcount > 0) {
-        int f_status_size = get_fortran_status_size();
+        int f_status_size = 0;
+
+        if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
+            if (!validate_fortran_status_size("mpi_waitsome_", &f_status_size, ierr)) {
+                free(c_requests);
+                free(c_indices);
+                free(c_statuses);
+                return;
+            }
+        }
         for (i = 0; i < c_outcount; i++) {
             if (array_of_indices != NULL) {
                 array_of_indices[i] = (MPI_Fint)(c_indices[i] + 1);
@@ -1671,7 +1741,14 @@ void mpi_testall_(MPI_Fint *count,
     }
 
     if (c_flag && c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
-        int f_status_size = get_fortran_status_size();
+        int f_status_size = 0;
+
+        if (!validate_fortran_status_size("mpi_testall_", &f_status_size, ierr)) {
+            free(c_requests);
+            free(c_statuses);
+            return;
+        }
+
         for (i = 0; i < n; i++) {
             PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
         }
@@ -1810,8 +1887,17 @@ void mpi_testsome_(MPI_Fint *incount,
     }
 
     if (c_outcount != MPI_UNDEFINED && c_outcount > 0) {
-        int f_status_size = get_fortran_status_size();
-        for (i = 0; i < c_outcount; i++) {
+        int f_status_size = 0;
+
+        if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
+            if (!validate_fortran_status_size("mpi_testsome_", &f_status_size, ierr)) {
+                free(c_requests);
+                free(c_indices);
+                free(c_statuses);
+                return;
+            }
+       } 
+       for (i = 0; i < c_outcount; i++) {
             if (array_of_indices != NULL) {
                 array_of_indices[i] = (MPI_Fint)(c_indices[i] + 1);
             }
