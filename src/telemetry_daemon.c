@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <time.h>
 #include <curl/curl.h>
+#include <signal.h> 
+#include <errno.h>   
 
 #include "shared_telemetry.h"
 
@@ -81,12 +83,14 @@ void flush_batch_to_db(telemetry_event_t *batch, size_t count) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <shm_name>\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <shm_name> <parent_pid>\n", argv[0]);
         return 1;
     }
 
     const char *shm_name = argv[1];
+    pid_t parent_pid = (pid_t)atoi(argv[2]); // Parse the parent PID
+
     usleep(100000); // Wait for MPI app to finish initialization
 
     int fd = shm_open(shm_name, O_RDWR, 0666);
@@ -105,6 +109,8 @@ int main(int argc, char *argv[]) {
     struct timespec sleep_time = {0, 100000000}; // 100ms
     telemetry_event_t batch[4096];
 
+    time_t last_heartbeat_check = time(NULL);
+
     while (atomic_load_explicit(&shm_state->daemon_running, memory_order_acquire)) {
         size_t total_batch_size = 0;
 
@@ -121,6 +127,20 @@ int main(int argc, char *argv[]) {
             if (total_batch_size > 0) {
                 atomic_store_explicit(&ring->tail, tail, memory_order_release);
             }
+        }
+
+        // Check the parent process is still alive (every 2 seconds) ---
+        time_t now = time(NULL);
+        if (now - last_heartbeat_check >= 2) {
+            // kill(pid, 0) returns -1 with errno ESRCH if the process no longer exists
+            if (kill(parent_pid, 0) == -1 && errno == ESRCH) {
+                fprintf(stderr, "[Daemon %s] Parent PID %d died unexpectedly. Initiating emergency telemetry flush.\n", hostname, parent_pid);
+                
+                // Break out of the while loop. This triggers the final flush 
+                // and cleans up the memory, preventing a zombie daemon
+                break; 
+            }
+            last_heartbeat_check = now;
         }
 
         if (total_batch_size > 0) {

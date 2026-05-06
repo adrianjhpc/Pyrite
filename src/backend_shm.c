@@ -70,10 +70,16 @@ static int shm_init(int rank, int size) {
             atomic_init(&shm_state->buffers[i].tail, 0);
             atomic_init(&shm_state->buffers[i].dropped_events, 0);
         }
+     
+        // Get the parent process pid to enable checking for crashes by the daemon
+        char pid_str[32];
+        snprintf(pid_str, sizeof(pid_str), "%d", getpid());
 
         // Spawn the daemon for this specific NUMA region
         if (fork() == 0) {
-            execl("/opt/mpi_telemetry/bin/telemetry_daemon", "telemetry_daemon", shm_name, NULL);
+            // Pass the PID as the third argument (argv[2])
+            execl("/opt/mpi_telemetry/bin/telemetry_daemon", 
+                  "telemetry_daemon", shm_name, pid_str, NULL);
             exit(1); 
         }
     }
