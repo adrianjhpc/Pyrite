@@ -1243,6 +1243,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
     return rc;
 }
 
+#ifdef MPI_TRACE_ENABLE_FORTRAN_SUPPORT
 /* -------------------------------------------------------------------------- */
 /* Fortran Helpers                                                            */
 /* -------------------------------------------------------------------------- */
@@ -1264,6 +1265,25 @@ static int fortran_statuses_are_ignore(MPI_Fint *statuses) {
 #endif
 }
 
+extern int mpi_tracking_get_status_size(void);
+
+static int get_fortran_status_size(void) {
+    static int cached = 0;
+
+    if (cached > 0) {
+        return cached;
+    }
+
+#ifdef MPI_F_STATUS_SIZE
+    cached = MPI_F_STATUS_SIZE;
+#elif defined(MPI_STATUS_SIZE)
+    cached = MPI_STATUS_SIZE;
+#else
+    cached = mpi_tracking_get_status_size();
+#endif
+
+    return cached;
+}
 
 
 /* -------------------------------------------------------------------------- */
@@ -1444,8 +1464,9 @@ void mpi_waitall_(MPI_Fint *count,
         }
 
         if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
+            int f_status_size = get_fortran_status_size();
             for (i = 0; i < n; i++) {
-                PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i]);
+                PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
             }
         }
     }
@@ -1577,13 +1598,14 @@ void mpi_waitsome_(MPI_Fint *incount,
     }
 
     if (c_outcount != MPI_UNDEFINED && c_outcount > 0) {
+        int f_status_size = get_fortran_status_size();
         for (i = 0; i < c_outcount; i++) {
             if (array_of_indices != NULL) {
                 array_of_indices[i] = (MPI_Fint)(c_indices[i] + 1);
             }
 
             if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
-                PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i]);
+                PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
             }
         }
     }
@@ -1649,8 +1671,9 @@ void mpi_testall_(MPI_Fint *count,
     }
 
     if (c_flag && c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
+        int f_status_size = get_fortran_status_size();
         for (i = 0; i < n; i++) {
-            PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i]);
+            PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
         }
     }
 
@@ -1787,13 +1810,14 @@ void mpi_testsome_(MPI_Fint *incount,
     }
 
     if (c_outcount != MPI_UNDEFINED && c_outcount > 0) {
+        int f_status_size = get_fortran_status_size();
         for (i = 0; i < c_outcount; i++) {
             if (array_of_indices != NULL) {
                 array_of_indices[i] = (MPI_Fint)(c_indices[i] + 1);
             }
 
             if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
-                PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i]);
+                PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
             }
         }
     }
@@ -1810,3 +1834,5 @@ void mpi_testsome__(MPI_Fint *incount, MPI_Fint array_of_requests[], MPI_Fint *o
 void MPI_TESTSOME(MPI_Fint *incount, MPI_Fint array_of_requests[], MPI_Fint *outcount, MPI_Fint array_of_indices[], MPI_Fint array_of_statuses[], MPI_Fint *ierr) {
     mpi_testsome_(incount, array_of_requests, outcount, array_of_indices, array_of_statuses, ierr);
 }
+
+#endif /* MPI_TRACE_ENABLE_FORTRAN_SUPPORT */
