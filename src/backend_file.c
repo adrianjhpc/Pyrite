@@ -57,8 +57,10 @@ static int file_init(int rank, int size) {
 
     // Rank 0 opens the final global .mpic file and writes the header
     if (rank == 0) {
+        char stamp[DATETIME_LENGTH];
         char final_name[STRING_LENGTH];
-        snprintf(final_name, sizeof(final_name), "%.995s-%s.mpic", tracking_programname, tracking_datetime);
+        get_date_time_string(stamp);
+        snprintf(final_name, sizeof(final_name), "%.995s-%s.mpic", tracking_programname, stamp);
         global_file = fopen(final_name, "wb");
         
         if (global_file) {
