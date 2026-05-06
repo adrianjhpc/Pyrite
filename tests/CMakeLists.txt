@@ -72,8 +72,8 @@ endif()
 # -----------------------------------------------------------------------------
 
 set(_default_trace_target "")
-if(TARGET mpi_comm_tracker)
-    set(_default_trace_target mpi_comm_tracker)
+if(TARGET mpitrace_file)
+    set(_default_trace_target mpitrace_file)
 elseif(TARGET mpi_communication_tracking)
     set(_default_trace_target mpi_communication_tracking)
 endif()

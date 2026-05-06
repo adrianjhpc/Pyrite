@@ -5,7 +5,7 @@
 find_package(MPI REQUIRED COMPONENTS C)
 
 add_executable(mpi_test_messages mpi_test_messages.c)
-target_link_libraries(mpi_test_messages PRIVATE MPI::MPI_C mpi_comm_tracker)
+target_link_libraries(mpi_test_messages PRIVATE MPI::MPI_C mpitrace_file)
 
 
 # ==========================================
@@ -24,7 +24,7 @@ if(CMAKE_Fortran_COMPILER)
     
     if(MPI_Fortran_FOUND)
         add_executable(fortran_mpi_pingpong fortran_mpi_pingpong.f90)
-        target_link_libraries(fortran_mpi_pingpong PRIVATE MPI::MPI_Fortran mpi_comm_tracker)
+        target_link_libraries(fortran_mpi_pingpong PRIVATE MPI::MPI_Fortran mpitrace_file)
         message(STATUS "Fortran and MPI_Fortran found: Building fortran_mpi_pingpong")
     else()
         message(WARNING "Fortran compiler found, but MPI Fortran libraries are missing. Skipping Fortran example.")

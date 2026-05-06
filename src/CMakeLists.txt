@@ -1,18 +1,58 @@
-set(SOURCES 
-    mpi_communication_tracking.c
+# Ensure MPI is found
+find_package(MPI REQUIRED COMPONENTS C)
+
+# Define common compiler flags
+set(COMMON_COMPILER_FLAGS -Wall -Wextra -O2)
+
+# =========================================================================
+# File-Based Tracing Library (LD_PRELOAD target)
+# =========================================================================
+add_library(mpitrace_file SHARED 
+    mpi_communication_tracking.c 
+    backend_file.c
 )
 
-# Create a shared library so it can be injected via LD_PRELOAD
-add_library(mpi_comm_tracker SHARED ${SOURCES})
+target_link_libraries(mpitrace_file PRIVATE MPI::MPI_C)
+target_include_directories(mpitrace_file PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(mpitrace_file PRIVATE ${COMMON_COMPILER_FLAGS})
+set_target_properties(mpitrace_file PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Link the MPI C libraries to our target. 
-target_link_libraries(mpi_comm_tracker PRIVATE MPI::MPI_C)
+# =========================================================================
+# Shared-Memory Telemetry Library (LD_PRELOAD target)
+# =========================================================================
+add_library(mpitrace_shm SHARED 
+    mpi_communication_tracking.c 
+    backend_shm.c
+)
 
-# Include the current directory to find mpi_communication_tracking.h
-target_include_directories(mpi_comm_tracker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# SHM requires 'rt' (POSIX Realtime) for shm_open, and 'pthread' for atomics/forking
+target_link_libraries(mpitrace_shm PRIVATE MPI::MPI_C rt pthread)
+target_include_directories(mpitrace_shm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(mpitrace_shm PRIVATE ${COMMON_COMPILER_FLAGS})
+set_target_properties(mpitrace_shm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Add standard compiler flags for warnings and optimization
-target_compile_options(mpi_comm_tracker PRIVATE -Wall -Wextra -O2)
+# =========================================================================
+# The Standalone Telemetry Daemon Executable
+# =========================================================================
 
-# Ensure the library is built with Position Independent Code (PIC)
-set_target_properties(mpi_comm_tracker PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Ask CMake to locate the cURL headers and binaries on the system
+find_package(CURL REQUIRED)
+
+# Declare the executable
+add_executable(telemetry_daemon telemetry_daemon.c)
+
+# Add the cURL include directories so the compiler can find <curl/curl.h>
+target_include_directories(telemetry_daemon PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR} 
+    ${CURL_INCLUDE_DIRS}
+)
+
+# Link the Daemon against MPI, Realtime (rt), Pthreads, and the cURL libraries
+target_link_libraries(telemetry_daemon PRIVATE 
+    MPI::MPI_C 
+    rt 
+    pthread 
+    ${CURL_LIBRARIES}
+)
+
+target_compile_options(telemetry_daemon PRIVATE ${COMMON_COMPILER_FLAGS})

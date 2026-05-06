@@ -11,6 +11,7 @@ extern "C" {
 #define STRING_LENGTH 1024
 #define DATETIME_LENGTH 64
 
+/* MPI Event Types */
 #define MPI_SEND_TYPE       13
 #define MPI_RECV_TYPE       14
 #define MPI_BSEND_TYPE      15
@@ -38,17 +39,7 @@ extern "C" {
 #define MPI_TESTALL_TYPE    37
 #define MPI_TESTSOME_TYPE   38
 
-typedef struct small_node {
-    double time;
-    int id;
-    int message_type;
-    int sender;
-    int receiver;
-    int count;
-    int bytes;
-    struct small_node *next;
-} small_node_t;
-
+/* --- LEGACY FORMATS FOR FILE I/O --- */
 typedef struct small_node_no_link {
     double time;
     int id;
@@ -58,21 +49,6 @@ typedef struct small_node_no_link {
     int count;
     int bytes;
 } small_node_no_link_t;
-
-typedef struct large_node {
-    double time;
-    int id;
-    int message_type;
-    int sender1;
-    int receiver1;
-    int count1;
-    int bytes1;
-    int sender2;
-    int receiver2;
-    int count2;
-    int bytes2;
-    struct large_node *next;
-} large_node_t;
 
 typedef struct large_node_no_link {
     double time;
@@ -96,30 +72,49 @@ typedef struct process_info {
     char hostname[STRING_LENGTH];
 } process_info_t;
 
-/* Utility functions */
-int mpi_high_water_name_to_colour(const char *name);
-int mpi_high_water_get_key(void);
-void get_date_time_string(char *datetime);
-unsigned long get_processor_and_core(int *chip, int *core);
+/* --- UNIFIED TELEMETRY EVENT --- */
+typedef struct telemetry_event {
+    double time;
+    int id;
+    int message_type;
+    int is_large; 
+    
+    int sender;
+    int receiver;
+    int count;
+    int bytes;
+    
+    int sender2;
+    int receiver2;
+    int count2;
+    int bytes2;
+} telemetry_event_t;
 
-int open_data_files(void);
-int open_global_file(void);
-int gather_process_information(void);
-int write_global_information(void);
-int write_data_output(void);
-int close_data_file(void);
-int communicate_total_message_numbers(void);
-int process_data_files(void);
-int close_global_file(void);
-int get_program_name(void);
-int get_process_id(void);
-int get_datetime(void);
-int get_local_filename(char *filename, const char *hostname, int proc_id);
-int get_data_limit(void);
+/* Backend Interface Definition */
+typedef struct {
+    int (*init_backend)(int rank, int size);
+    void (*record_event)(telemetry_event_t *event);
+    void (*finalize_backend)(void);
+} tracking_backend_t;
+
+void register_tracking_backend(tracking_backend_t *backend);
+
+/* Common state exposed to backends */
+extern double tracking_start_time;
+extern int tracking_my_rank;
+extern int tracking_my_size;
+extern char tracking_hostname[STRING_LENGTH];
+extern char tracking_programname[STRING_LENGTH];
+extern char tracking_datetime[DATETIME_LENGTH];
+
+/* Utility functions */
+double trace_timestamp(void);
+int datatype_nbytes(int count, MPI_Datatype datatype);
+unsigned long get_processor_and_core(int *chip, int *core);
+void get_date_time_string(char *out);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* MPI_COMMUNICATION_TRACKING_H */
-
