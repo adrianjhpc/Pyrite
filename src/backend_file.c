@@ -107,10 +107,20 @@ static void file_finalize(void) {
     if (small_output_file) fclose(small_output_file);
     if (large_output_file) fclose(large_output_file);
 
+    int counts_ok = 1;
     // Gather total message counts to Rank 0
     if (tracking_my_rank == 0) {
         all_small_counts = (int *)calloc((size_t)tracking_my_size, sizeof(int));
         all_large_counts = (int *)calloc((size_t)tracking_my_size, sizeof(int));
+        if (!all_small_counts || !all_large_counts) counts_ok = 0;
+    }
+
+    // Abort if rank 0 didn't manage to allocate required storage
+    PMPI_Bcast(&counts_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (!counts_ok) {
+        free(all_small_counts);
+        free(all_large_counts);
+        return;
     }
 
     PMPI_Gather(&small_count, 1, MPI_INT, all_small_counts, 1, MPI_INT, 0, MPI_COMM_WORLD);
