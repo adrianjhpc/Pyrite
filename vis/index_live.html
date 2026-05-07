@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pyrite - Live Telemetry</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+      .live-pulse {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        background-color: #f85149;
+        border-radius: 50%;
+        margin-right: 8px;
+        box-shadow: 0 0 8px #f85149;
+        animation: pulse 1.5s infinite;
+      }
+      @keyframes pulse {
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.7); }
+        70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(248, 81, 73, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(248, 81, 73, 0); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app-container">
+      <aside id="sidebar">
+        <div class="sidebar-header">
+          <h2>Pyrite <span style="font-size: 0.5em; color: #f85149; vertical-align: middle;">LIVE</span></h2>
+        </div>
+
+        <div class="control-group playback-panel" style="background: rgba(248, 81, 73, 0.05); border-color: rgba(248, 81, 73, 0.2);">
+          <h3 style="color: #f85149;">Cluster Status</h3>
+          <div class="time-display" style="font-size: 1.1rem; padding: 10px 0;">
+            <span class="live-pulse"></span>
+            <span id="currentTimeLabel" style="color: #c9d1d9;">Connecting to Cluster...</span>
+          </div>
+        </div>
+
+        <div class="control-group record-panel">
+          <h3>Record Session</h3>
+          <button id="btn-rec-ui-start">⏺ Record UI</button>
+          <button id="btn-rec-ui-stop" disabled>⏹ Stop UI</button>
+          <span id="recUIStatus" style="margin-left:10px;color:#8b949e;"></span>
+        </div>
+
+        <div class="control-group" style="margin-top: 20px;">
+          <h3>Camera & Layout</h3>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button id="btn-view-iso">Iso</button>
+            <button id="btn-view-top">Top</button>
+            <button id="btn-view-front">Front</button>
+            <button id="btn-view-side">Side</button>
+            <button id="btn-view-reset">Reset</button>
+          </div>
+          <div style="margin-top:10px;">
+            <label style="font-size:0.85rem; color:#8b949e;">
+              <input type="checkbox" id="chk-follow" />
+              Follow selected (locks controls)
+            </label>
+          </div>
+          <div style="margin-top:10px;">
+            <label style="font-size:0.85rem; color:#8b949e;">Layout</label>
+            <select id="layoutMode" style="width:100%;">
+              <option value="blueprint" selected>3D (Blueprint)</option>
+              <option value="topdown">Top-down</option>
+              <option value="rackfront">Rack-front (Y vs X)</option>
+              <option value="line">Line (debug)</option>
+            </select>
+          </div>
+          <div style="margin-top:12px; display:grid; grid-template-columns: 1fr auto; gap:8px;">
+            <input id="viewName" placeholder="view name" />
+            <button id="btn-view-save">Save</button>
+          </div>
+          <div style="margin-top:8px; display:grid; grid-template-columns: 1fr auto auto; gap:8px;">
+            <select id="savedViews" style="width:100%;"></select>
+            <button id="btn-view-load">Load</button>
+            <button id="btn-view-del">Del</button>
+          </div>
+          <div id="camStatus" style="margin-top:8px; font-size:0.8rem; color:#8b949e;"></div>
+        </div>
+
+        <div style="margin-top: 20px;">
+          <h3 style="font-size: 0.75rem; color: #8b949e; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.5px;">Live Message Stats</h3>
+          <div id="activeStatsContainer"></div>
+        </div>
+      </aside>
+
+      <main id="canvas-container">
+        <div id="visCanvas"></div> 
+      </main>
+    </div>
+
+    <script src="visualiser_core.js"></script>
+    <script src="provider_live.js"></script>
+    </body>
+</html>
