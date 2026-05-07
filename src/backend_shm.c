@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <sched.h>
 
 #include "mpi_communication_tracking.h"
 #include "shared_telemetry.h"
@@ -18,6 +20,7 @@
 /* -------------------------------------------------------------------------- */
 
 static shared_telemetry_state_t *shm_state = NULL;
+static telemetry_slot_t *my_slot = NULL;
 static spsc_ring_buffer_t *my_ring_buffer = NULL;
 
 static char shm_name[256] = {0};
@@ -38,6 +41,7 @@ static pid_t daemon_pid = -1;
 
 static void reset_backend_state(void) {
     shm_state = NULL;
+    my_slot = NULL;
     my_ring_buffer = NULL;
     shm_name[0] = '\0';
     shm_region_size = 0;
@@ -116,7 +120,6 @@ static unsigned long long determine_job_tag(MPI_Comm subset_comm, int subset_ran
         if (job_env != NULL && job_env[0] != '\0') {
             tag = hash_string_u64(job_env);
         } else {
-            /* Fallback: subset leader PID is host-local unique for live jobs */
             tag = (unsigned long long)getpid();
         }
     }
@@ -125,7 +128,8 @@ static unsigned long long determine_job_tag(MPI_Comm subset_comm, int subset_ran
     return tag;
 }
 
-static int build_shm_name(char *out, size_t out_len, const char *host, unsigned long long job_tag, int numa_region) {
+static int build_shm_name(char *out, size_t out_len, const char *host,
+                          unsigned long long job_tag, int numa_region) {
     int rc;
 
     if (out == NULL || out_len == 0) {
@@ -145,8 +149,8 @@ static int build_shm_name(char *out, size_t out_len, const char *host, unsigned 
 }
 
 /*
- * Dynamically query Linux for the current CPU/NUMA location.
- * If unavailable, fall back to a single-region view for correctness.
+ * Query Linux for the current CPU/NUMA node.
+ * Fallback is a single-region view for correctness.
  */
 static int get_my_numa_node(int local_rank) {
     unsigned cpu = 0;
@@ -159,11 +163,11 @@ static int get_my_numa_node(int local_rank) {
     }
 #endif
 
-    /* Correctness-first fallback: one shared region per node */
     return 0;
 }
 
-static int create_and_map_region(const char *name, size_t bytes, shared_telemetry_state_t **state_out) {
+static int create_and_map_region(const char *name, size_t bytes,
+                                 shared_telemetry_state_t **state_out) {
     int fd = -1;
     shared_telemetry_state_t *mapped = NULL;
 
@@ -185,7 +189,8 @@ static int create_and_map_region(const char *name, size_t bytes, shared_telemetr
         return MPI_ERR_IO;
     }
 
-    mapped = (shared_telemetry_state_t *)mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    mapped = (shared_telemetry_state_t *)mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+                                              MAP_SHARED, fd, 0);
     if (mapped == MAP_FAILED) {
         log_shm_error("mmap(create)", errno);
         close_fd_quietly(fd);
@@ -198,7 +203,8 @@ static int create_and_map_region(const char *name, size_t bytes, shared_telemetr
     return MPI_SUCCESS;
 }
 
-static int attach_and_map_region(const char *name, size_t bytes, shared_telemetry_state_t **state_out) {
+static int attach_and_map_region(const char *name, size_t bytes,
+                                 shared_telemetry_state_t **state_out) {
     int fd = -1;
     shared_telemetry_state_t *mapped = NULL;
 
@@ -213,7 +219,8 @@ static int attach_and_map_region(const char *name, size_t bytes, shared_telemetr
         return MPI_ERR_IO;
     }
 
-    mapped = (shared_telemetry_state_t *)mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    mapped = (shared_telemetry_state_t *)mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+                                              MAP_SHARED, fd, 0);
     if (mapped == MAP_FAILED) {
         log_shm_error("mmap(attach)", errno);
         close_fd_quietly(fd);
@@ -232,7 +239,8 @@ static void cleanup_partial_mapping(shared_telemetry_state_t **state_ptr, size_t
     }
 }
 
-static int spawn_daemon_checked(const char *region_name, pid_t parent_pid, pid_t *daemon_pid_out) {
+static int spawn_daemon_checked(const char *region_name, pid_t parent_pid,
+                                pid_t *daemon_pid_out) {
     int pipefd[2] = { -1, -1 };
     pid_t pid;
     int exec_err = 0;
@@ -266,6 +274,7 @@ static int spawn_daemon_checked(const char *region_name, pid_t parent_pid, pid_t
 
     if (pid == 0) {
         int errnum;
+
         close_fd_quietly(pipefd[0]);
 
         snprintf(pid_str, sizeof(pid_str), "%d", (int)parent_pid);
@@ -300,8 +309,24 @@ static int spawn_daemon_checked(const char *region_name, pid_t parent_pid, pid_t
         return MPI_ERR_IO;
     }
 
-    /* nread == 0 means the write end was closed on successful exec */
     *daemon_pid_out = pid;
+    return MPI_SUCCESS;
+}
+
+static int wait_for_all_slot_anchors(shared_telemetry_state_t *state, int subset_size) {
+    int i;
+
+    if (state == NULL || subset_size <= 0) {
+        return MPI_ERR_ARG;
+    }
+
+    for (i = 0; i < subset_size; i++) {
+        while (atomic_load_explicit(&state->slots[i].anchor_ready,
+                                    memory_order_acquire) == 0) {
+            sched_yield();
+        }
+    }
+
     return MPI_SUCCESS;
 }
 
@@ -323,6 +348,7 @@ static int shm_init(int rank, int size) {
     int create_ok = 1;
     int attach_ok = 1;
     int all_attach_ok = 1;
+    int anchors_ok = 1;
     int daemon_ok = 1;
     pid_t local_daemon_pid = -1;
 
@@ -331,7 +357,8 @@ static int shm_init(int rank, int size) {
 
     reset_backend_state();
 
-    if (PMPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &node_comm) != MPI_SUCCESS) {
+    if (PMPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,
+                             MPI_INFO_NULL, &node_comm) != MPI_SUCCESS) {
         log_shm_message("PMPI_Comm_split_type(MPI_COMM_TYPE_SHARED) failed");
         return MPI_ERR_COMM;
     }
@@ -360,41 +387,56 @@ static int shm_init(int rank, int size) {
 
     job_tag = determine_job_tag(subset_comm, subset_rank);
 
-    if (build_shm_name(shm_name, sizeof(shm_name), tracking_hostname, job_tag, numa_region) != 0) {
+    if (build_shm_name(shm_name, sizeof(shm_name), tracking_hostname,
+                       job_tag, numa_region) != 0) {
         PMPI_Comm_free(&subset_comm);
         PMPI_Comm_free(&node_comm);
         log_shm_message("failed to construct a unique shared-memory name");
         return MPI_ERR_INTERN;
     }
 
-    local_region_size = offsetof(shared_telemetry_state_t, buffers) + ((size_t)subset_size * sizeof(spsc_ring_buffer_t));
+    local_region_size = offsetof(shared_telemetry_state_t, slots) +
+                        ((size_t)subset_size * sizeof(telemetry_slot_t));
 
     /* Phase 1: creator allocates and initialises the region */
     if (subset_rank == 0) {
         int rc;
+        size_t i;
+
         creator = 1;
 
         rc = create_and_map_region(shm_name, local_region_size, &local_state);
         if (rc != MPI_SUCCESS) {
             create_ok = 0;
         } else {
+            memset(local_state, 0, local_region_size);
+
+            atomic_init(&local_state->ready, 0);
             atomic_init(&local_state->daemon_running, 1);
-            local_state->num_ranks_in_subset = subset_size;
 
             /*
-             * Linux first-touch policy:
-             * The creator is assumed to be running on the local NUMA region, so
-             * zeroing the buffers here encourages local physical placement.
+             * Backend owns shm_unlink() during finalize().
+             * Daemon should not unlink in this configuration.
              */
-            for (int i = 0; i < subset_size; i++) {
-                atomic_init(&local_state->buffers[i].head, 0);
-                atomic_init(&local_state->buffers[i].tail, 0);
-                atomic_init(&local_state->buffers[i].dropped_events, 0);
+            atomic_init(&local_state->unlink_on_exit, 0);
+
+            local_state->layout_version = SHARED_TELEMETRY_LAYOUT_VERSION;
+            local_state->num_ranks_in_subset = subset_size;
+
+            for (i = 0; i < (size_t)subset_size; i++) {
+                atomic_init(&local_state->slots[i].anchor_ready, 0);
+                local_state->slots[i].subset_rank = (int)i;
+                local_state->slots[i].world_rank = -1;
+                local_state->slots[i].mpi_time_zero = 0.0;
+                local_state->slots[i].unix_time_zero_ns = 0;
+
+                atomic_init(&local_state->slots[i].ring.head, 0);
+                atomic_init(&local_state->slots[i].ring.tail, 0);
+                atomic_init(&local_state->slots[i].ring.dropped_events, 0);
             }
         }
     }
 
-    /* Ensure all ranks see whether the region was successfully created */
     PMPI_Bcast(&create_ok, 1, MPI_INT, 0, subset_comm);
     if (!create_ok) {
         cleanup_partial_mapping(&local_state, local_region_size);
@@ -414,7 +456,6 @@ static int shm_init(int rank, int size) {
         }
     }
 
-    /* Ensure everyone agrees whether all attachers succeeded */
     PMPI_Allreduce(&attach_ok, &all_attach_ok, 1, MPI_INT, MPI_MIN, subset_comm);
     if (!all_attach_ok) {
         cleanup_partial_mapping(&local_state, local_region_size);
@@ -428,7 +469,46 @@ static int shm_init(int rank, int size) {
         return MPI_ERR_IO;
     }
 
-    /* Phase 3: only after all ranks are attached do we spawn the daemon */
+    /*
+     * Phase 3: each rank publishes its own local MPI<->Unix anchor.
+     *
+     * event.time on this rank is relative to tracking_start_time, so this slot
+     * metadata is exactly the mapping the daemon needs later.
+     */
+    local_state->slots[subset_rank].subset_rank = subset_rank;
+    local_state->slots[subset_rank].world_rank = tracking_my_rank;
+    local_state->slots[subset_rank].mpi_time_zero = tracking_start_time;
+    local_state->slots[subset_rank].unix_time_zero_ns = tracking_start_unix_ns;
+
+    atomic_store_explicit(&local_state->slots[subset_rank].anchor_ready, 1,
+                          memory_order_release);
+
+    PMPI_Barrier(subset_comm);
+
+    if (subset_rank == 0) {
+        if (wait_for_all_slot_anchors(local_state, subset_size) != MPI_SUCCESS) {
+            anchors_ok = 0;
+        } else {
+            atomic_store_explicit(&local_state->ready, 1, memory_order_release);
+        }
+    }
+
+    PMPI_Bcast(&anchors_ok, 1, MPI_INT, 0, subset_comm);
+    if (!anchors_ok) {
+        cleanup_partial_mapping(&local_state, local_region_size);
+
+        if (creator) {
+            shm_unlink(shm_name);
+        }
+
+        PMPI_Comm_free(&subset_comm);
+        PMPI_Comm_free(&node_comm);
+        return MPI_ERR_IO;
+    }
+
+    PMPI_Barrier(subset_comm);
+
+    /* Phase 4: only after ready=1 do we spawn the daemon */
     if (subset_rank == 0) {
         int rc = spawn_daemon_checked(shm_name, getpid(), &local_daemon_pid);
         if (rc != MPI_SUCCESS) {
@@ -449,10 +529,10 @@ static int shm_init(int rank, int size) {
         return MPI_ERR_IO;
     }
 
-    /* Success: publish backend state */
     shm_state = local_state;
     shm_region_size = local_region_size;
-    my_ring_buffer = &shm_state->buffers[subset_rank];
+    my_slot = &shm_state->slots[subset_rank];
+    my_ring_buffer = &my_slot->ring;
     shm_subset_comm = subset_comm;
     my_subset_rank = subset_rank;
     my_subset_size = subset_size;
@@ -478,7 +558,8 @@ static void shm_record_event(telemetry_event_t *event) {
     tail = atomic_load_explicit(&my_ring_buffer->tail, memory_order_acquire);
 
     if (head - tail >= RING_BUFFER_SIZE) {
-        atomic_fetch_add_explicit(&my_ring_buffer->dropped_events, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&my_ring_buffer->dropped_events, 1,
+                                  memory_order_relaxed);
         return;
     }
 
@@ -488,9 +569,11 @@ static void shm_record_event(telemetry_event_t *event) {
 
 static void shm_finalize(void) {
     /*
-     * Important protocol note:
-     * The daemon is expected to continue draining buffers after daemon_running
-     * becomes 0, and only exit once all SPSC queues are empty.
+     * Protocol:
+     *   1. all local producers reach the barrier
+     *   2. creator sets daemon_running=0
+     *   3. daemon drains remaining ring contents and exits
+     *   4. creator waitpid()s the daemon, then unlinks shm
      */
 
     if (shm_subset_comm != MPI_COMM_NULL) {
@@ -504,6 +587,7 @@ static void shm_finalize(void) {
     if (shm_state != NULL && shm_region_size > 0) {
         munmap(shm_state, shm_region_size);
         shm_state = NULL;
+        my_slot = NULL;
         my_ring_buffer = NULL;
     }
 

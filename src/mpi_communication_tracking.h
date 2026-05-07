@@ -3,6 +3,7 @@
 
 #include <mpi.h>
 #include <sys/types.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -101,6 +102,7 @@ void register_tracking_backend(tracking_backend_t *backend);
 
 /* Common state exposed to backends */
 extern double tracking_start_time;
+extern int64_t tracking_start_unix_ns;
 extern int tracking_my_rank;
 extern int tracking_my_size;
 extern char tracking_hostname[STRING_LENGTH];

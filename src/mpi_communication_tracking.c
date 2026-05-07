@@ -19,6 +19,7 @@
 /* -------------------------------------------------------------------------- */
 
 double tracking_start_time = 0.0;
+int64_t tracking_start_unix_ns = 0;
 int tracking_my_rank = -1;
 int tracking_my_size = 0;
 char tracking_hostname[STRING_LENGTH] = {0};
@@ -176,6 +177,31 @@ static int current_world_rank_in_comm(MPI_Comm comm, int *world_rank_out) {
         return rc;
     }
     return translate_comm_rank_to_world(comm, local_rank, 0, world_rank_out);
+}
+
+static int sample_local_time_anchor(double *mpi_zero_out, int64_t *unix_zero_ns_out) {
+    double w0, w1;
+    struct timespec ts;
+
+    if (mpi_zero_out == NULL || unix_zero_ns_out == NULL) {
+        return -1;
+    }
+
+    /*
+     * Midpoint sampling reduces error from the clock_gettime() syscall latency.
+     */
+    w0 = PMPI_Wtime();
+
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        return -1;
+    }
+
+    w1 = PMPI_Wtime();
+
+    *mpi_zero_out = 0.5 * (w0 + w1);
+    *unix_zero_ns_out = (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+
+    return 0;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -446,7 +472,15 @@ static int begin_tracking_runtime(void) {
     err = PMPI_Barrier(MPI_COMM_WORLD);
     if (err != MPI_SUCCESS) { cleanup_failed_init(); return err; }
 
-    tracking_start_time = PMPI_Wtime();
+    /*
+     * Barrier gives rough startup alignment only.
+     * Precise DB timestamp registration is done per rank using the local
+     * MPI<->Unix anchor pair below.
+     */
+    if (sample_local_time_anchor(&tracking_start_time, &tracking_start_unix_ns) != 0) {
+        cleanup_failed_init();
+        return MPI_ERR_INTERN;
+    }
 
     get_program_name();
 
