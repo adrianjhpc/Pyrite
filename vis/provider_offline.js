@@ -70,46 +70,69 @@ const OfflineProvider = {
     },
 
     ensureChunkLoadedForTime: async function(time) {
-        if (!this.parsedData?.chunks || !this.uploadedFilePointer) return;
-        const chunks = this.parsedData.chunks;
+    if (!this.parsedData?.chunks || !this.uploadedFilePointer) return;
+    const chunks = this.parsedData.chunks;
 
-        while (true) {
-            let targetIndex = chunks.findIndex(c => time <= c.t_end);
-            if (targetIndex === -1) targetIndex = chunks.length - 1;
-            if (targetIndex === this.currentLoadedChunkIndex) return;
+    while (true) {
+        let targetIndex = chunks.findIndex(c => time <= c.t_end);
+        if (targetIndex === -1) targetIndex = chunks.length - 1;
 
-            if (this.chunkLoadPromise) {
-                if (this.chunkLoadIndexInFlight === targetIndex) { await this.chunkLoadPromise; return; }
-                await this.chunkLoadPromise; continue; 
+        const requiredKey = `${Math.max(0, targetIndex - 1)}:${targetIndex}`;
+        if (this.currentLoadedChunkIndex === requiredKey) return;
+
+        if (this.chunkLoadPromise) {
+            if (this.chunkLoadIndexInFlight === requiredKey) {
+                await this.chunkLoadPromise;
+                return;
             }
-
-            this.chunkLoadIndexInFlight = targetIndex;
-            const overlay = document.getElementById("loadingOverlay"), loadingText = document.getElementById("loadingText");
-
-            this.chunkLoadPromise = (async () => {
-                try {
-                    if (overlay) overlay.style.display = "block";
-                    if (loadingText) loadingText.textContent = `Unpacking Chunk ${targetIndex + 1}...`;
-                    await new Promise(r => setTimeout(r, 0));
-
-                    const c = chunks[targetIndex];
-                    const blob = this.uploadedFilePointer.slice(this.headerLengthOffset + c.offset, this.headerLengthOffset + c.offset + c.size);
-                    const timeline = JSON.parse(await this.decompressBlob(blob));
-                    if (timeline.length > 1) timeline.sort((a,b) => a.time - b.time);
-
-                    this.parsedData.timeline = timeline;
-                    this.currentLoadedChunkIndex = targetIndex;
-                } finally {
-                    if (overlay) overlay.style.display = "none";
-                }
-            })();
-
             await this.chunkLoadPromise;
-            this.chunkLoadPromise = null;
-            this.chunkLoadIndexInFlight = -1;
-            return;
+            continue;
         }
+
+        this.chunkLoadIndexInFlight = requiredKey;
+        const overlay = document.getElementById("loadingOverlay");
+        const loadingText = document.getElementById("loadingText");
+
+        this.chunkLoadPromise = (async () => {
+            try {
+                if (overlay) overlay.style.display = "block";
+                if (loadingText) loadingText.textContent = `Unpacking Chunk ${targetIndex + 1}...`;
+                await new Promise(r => setTimeout(r, 0));
+
+                const indices = [];
+                if (targetIndex > 0) indices.push(targetIndex - 1);
+                indices.push(targetIndex);
+
+                let mergedTimeline = [];
+
+                for (const idx of indices) {
+                    const c = chunks[idx];
+                    const blob = this.uploadedFilePointer.slice(
+                        this.headerLengthOffset + c.offset,
+                        this.headerLengthOffset + c.offset + c.size
+                    );
+                    const chunkTimeline = JSON.parse(await this.decompressBlob(blob));
+                    mergedTimeline = mergedTimeline.concat(chunkTimeline);
+                }
+
+                if (mergedTimeline.length > 1) {
+                    mergedTimeline.sort((a, b) => a.time - b.time);
+                }
+
+                this.parsedData.timeline = mergedTimeline;
+                this.currentLoadedChunkIndex = requiredKey;
+            } finally {
+                if (overlay) overlay.style.display = "none";
+            }
+        })();
+
+        await this.chunkLoadPromise;
+        this.chunkLoadPromise = null;
+        this.chunkLoadIndexInFlight = -1;
+        return;
+     }
     },
+
 
     seekToTime: async function(time) {
         this.currentTime = time;
@@ -124,30 +147,43 @@ const OfflineProvider = {
     },
 
     getActiveEventsForWindow: function() {
-        const raw = parseFloat(document.getElementById("speedSlider")?.value || "0");
-        const winSize = Math.min(0.2, 0.05 * Math.pow(10, raw));
-        const minWin = this.currentTime - winSize;
-        const minCollWin = this.currentTime - Math.max(winSize * 8.0, 0.5);
-        
-        const timeline = this.parsedData.timeline, activeEvents = [];
-        if (!timeline || timeline.length === 0) return activeEvents;
+    const raw = parseFloat(document.getElementById("speedSlider")?.value || "0");
+    const winSize = Math.min(0.2, 0.05 * Math.pow(10, raw));
+    const minWin = this.currentTime - winSize;
+    const minCollWin = this.currentTime - Math.max(winSize * 8.0, 0.5);
 
-        let l = 0, r = timeline.length - 1, m = 0;
-        while (l <= r) { m = Math.floor((l+r)/2); if (timeline[m].time <= this.currentTime) l = m + 1; else r = m - 1; }
-        
-        let captured = 0;
-        for (let i = r; i >= 0; i--) {
-            const evTime = timeline[i].time;
-            if (evTime >= minCollWin) {
-                const isColl = (timeline[i].call && timeline[i].call.includes("BCAST")) || (timeline[i].call && timeline[i].call.includes("REDUCE")) || (timeline[i].call && timeline[i].call.includes("GATHER"));
-                if (evTime >= minWin || isColl) {
-                    activeEvents.push(timeline[i]);
-                    if (++captured >= 800) break;
-                }
-            } else break;
+    const timeline = this.parsedData.timeline;
+    const activeEvents = [];
+    if (!timeline || timeline.length === 0) return activeEvents;
+
+    let l = 0, r = timeline.length - 1, m = 0;
+    while (l <= r) {
+        m = Math.floor((l + r) / 2);
+        if (timeline[m].time <= this.currentTime) l = m + 1;
+        else r = m - 1;
+    }
+
+    let captured = 0;
+    for (let i = r; i >= 0; i--) {
+        const ev = timeline[i];
+        const evTime = ev.time;
+        const callType = ev.call || ev.message_type;
+        const cat = MPI_CATEGORIES[callType] || DEFAULT_CATEGORY;
+        const isColl = (cat.type === "collective");
+
+        if (evTime >= minCollWin) {
+            if (evTime >= minWin || isColl) {
+                activeEvents.push(ev);
+                if (++captured >= 800) break;
+            }
+        } else {
+            break;
         }
-        return activeEvents;
-    },
+    }
+
+    return activeEvents;
+},
+
 
     togglePlayback: function() {
         this.isPlaying = !this.isPlaying;
