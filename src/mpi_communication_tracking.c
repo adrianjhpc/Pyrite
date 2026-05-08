@@ -73,12 +73,12 @@ double trace_timestamp(void) {
 }
 
 static void free_pending_request(pending_request_t *req) {
-  if (req == NULL) return;
-  if (req->have_comm_dup && req->comm_dup != MPI_COMM_NULL && req->comm_dup != MPI_COMM_WORLD) {
-    PMPI_Comm_free(&req->comm_dup);
-    req->comm_dup = MPI_COMM_WORLD;
-  }
-  free(req);
+    if (req == NULL) return;
+    if (req->have_group && req->group != MPI_GROUP_NULL) {
+        PMPI_Group_free(&req->group);
+        req->group = MPI_GROUP_NULL;
+    }
+    free(req);
 }
 
 static void free_pending_request_list(void) {
@@ -259,32 +259,35 @@ static pending_request_t *detach_pending_request(MPI_Request handle) {
 static void register_pending_request(MPI_Request handle, int message_type, int sender_world, int receiver_world,
                                      int count, MPI_Datatype datatype, int tag, int is_recv, int source_rank_param,
                                      int peer_is_remote_group, MPI_Comm comm) {
-  pending_request_t *req;
-  if (handle == MPI_REQUEST_NULL) return;
+    pending_request_t *req;
+    if (handle == MPI_REQUEST_NULL) return;
 
-  req = (pending_request_t *)calloc(1, sizeof(pending_request_t));
-  if (req == NULL) return;
+    req = (pending_request_t *)calloc(1, sizeof(pending_request_t));
+    if (req == NULL) return;
 
-  req->handle = handle;
-  req->message_type = message_type;
-  req->sender_world = sender_world;
-  req->receiver_world = receiver_world;
-  req->count = count;
-  req->datatype = datatype;
-  req->tag = tag;
-  req->is_recv = is_recv;
-  req->source_rank_param = source_rank_param;
-  req->peer_is_remote_group = peer_is_remote_group;
-  req->comm_dup = MPI_COMM_WORLD;
-  req->have_comm_dup = 0;
-  req->next = pending_requests;
+    req->handle = handle;
+    req->message_type = message_type;
+    req->sender_world = sender_world;
+    req->receiver_world = receiver_world;
+    req->count = count;
+    req->datatype = datatype;
+    req->tag = tag;
+    req->is_recv = is_recv;
+    req->source_rank_param = source_rank_param;
+    req->peer_is_remote_group = peer_is_remote_group;
+    
+    req->group = MPI_GROUP_NULL;
+    req->have_group = 0;
+    req->comm_id = MPI_Comm_c2f(comm);
+    req->next = pending_requests;
 
-  if (is_recv && comm != MPI_COMM_WORLD && comm != MPI_COMM_NULL) {
-    if (PMPI_Comm_dup(comm, &req->comm_dup) == MPI_SUCCESS) {
-      req->have_comm_dup = 1;
+    // Safely cache the local group instead of calling the collective Comm_dup
+    if (is_recv && comm != MPI_COMM_WORLD && comm != MPI_COMM_NULL) {
+        if (PMPI_Comm_group(comm, &req->group) == MPI_SUCCESS) {
+            req->have_group = 1;
+        }
     }
-  }
-  pending_requests = req;
+    pending_requests = req;
 }
 
 static int actual_count_from_status(MPI_Status *status, MPI_Datatype datatype, int fallback_count) {
@@ -304,31 +307,37 @@ static int status_is_cancelled(MPI_Status *status) {
 }
 
 static void complete_pending_request(pending_request_t *req, MPI_Status *status, int status_valid, double completion_time) {
-  int cancelled = 0;
-  if (req == NULL) return;
-  if (status_valid && status != NULL) cancelled = status_is_cancelled(status);
+    int cancelled = 0;
+    if (req == NULL) return;
+    if (status_valid && status != NULL) cancelled = status_is_cancelled(status);
 
-  if (!cancelled) {
-    if (req->is_recv) {
-      int actual_sender = req->sender_world;
-      int actual_count = req->count;
+    if (!cancelled) {
+        if (req->is_recv) {
+            int actual_sender = req->sender_world;
+            int actual_count = req->count;
 
-      if (status_valid && status != NULL) {
-	actual_count = actual_count_from_status(status, req->datatype, req->count);
-	if (req->source_rank_param == MPI_ANY_SOURCE) {
-	  if (req->have_comm_dup && req->comm_dup != MPI_COMM_NULL && req->comm_dup != MPI_COMM_WORLD) {
-	    translate_comm_rank_to_world(req->comm_dup, status->MPI_SOURCE, req->peer_is_remote_group, &actual_sender);
-	  } else {
-	    actual_sender = status->MPI_SOURCE;
-	  }
-	}
-      }
-      record_small_event(completion_time, req->message_type, PMPI_Comm_c2f(req->comm_dup), req->tag, actual_sender, req->receiver_world, actual_count, req->datatype);
-    } else {
-      record_small_event(completion_time, req->message_type, PMPI_Comm_c2f(req->comm_dup), req->tag, req->sender_world, req->receiver_world, req->count, req->datatype);
+            if (status_valid && status != NULL) {
+                actual_count = actual_count_from_status(status, req->datatype, req->count);
+                if (req->source_rank_param == MPI_ANY_SOURCE) {
+                    if (req->have_group && req->group != MPI_GROUP_NULL) {
+                        int actual_sender_temp = MPI_UNDEFINED;
+                        PMPI_Group_translate_ranks(req->group, 1, &status->MPI_SOURCE, world_group, &actual_sender_temp);
+                        if (actual_sender_temp != MPI_UNDEFINED) {
+                            actual_sender = actual_sender_temp;
+                        } else {
+                            actual_sender = status->MPI_SOURCE;
+                        }
+                    } else {
+                        actual_sender = status->MPI_SOURCE;
+                    }
+                }
+            }
+            record_small_event(completion_time, req->message_type, req->comm_id, req->tag, actual_sender, req->receiver_world, actual_count, req->datatype);
+        } else {
+            record_small_event(completion_time, req->message_type, req->comm_id, req->tag, req->sender_world, req->receiver_world, req->count, req->datatype);
+        }
     }
-  }
-  free_pending_request(req);
+    free_pending_request(req);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -537,7 +546,7 @@ int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int ta
       current_world_rank_in_comm(comm, &sender_world);
       translate_comm_rank_to_world(comm, dest, is_inter ? 1 : 0, &receiver_world);
     }
-    record_small_event(ts, MPI_SEND_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
+    record_small_event(ts, MPI_SEND_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
   }
   return rc;
 }
@@ -568,7 +577,7 @@ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, M
     } else {
       sender_world = actual_source;
     }
-    record_small_event(ts, MPI_RECV_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, actual_count, datatype);
+    record_small_event(ts, MPI_RECV_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, actual_count, datatype);
   }
 
   if (!c_status_is_ignore(status) && call_status == &local_status) *status = local_status;
@@ -590,7 +599,7 @@ int MPI_Bsend(const void *buf, int count, MPI_Datatype datatype, int dest, int t
       current_world_rank_in_comm(comm, &sender_world);
       translate_comm_rank_to_world(comm, dest, is_inter ? 1 : 0, &receiver_world);
     }
-    record_small_event(ts, MPI_BSEND_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
+    record_small_event(ts, MPI_BSEND_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
   }
   return rc;
 }
@@ -610,7 +619,7 @@ int MPI_Ssend(const void *buf, int count, MPI_Datatype datatype, int dest, int t
       current_world_rank_in_comm(comm, &sender_world);
       translate_comm_rank_to_world(comm, dest, is_inter ? 1 : 0, &receiver_world);
     }
-    record_small_event(ts, MPI_SSEND_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
+    record_small_event(ts, MPI_SSEND_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
   }
   return rc;
 }
@@ -630,7 +639,7 @@ int MPI_Rsend(const void *buf, int count, MPI_Datatype datatype, int dest, int t
       current_world_rank_in_comm(comm, &sender_world);
       translate_comm_rank_to_world(comm, dest, is_inter ? 1 : 0, &receiver_world);
     }
-    record_small_event(ts, MPI_RSEND_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
+    record_small_event(ts, MPI_RSEND_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
   }
   return rc;
 }
@@ -655,7 +664,7 @@ int MPI_Isend(const void *buf, int count, MPI_Datatype datatype, int dest, int t
       register_pending_request(*request, MPI_ISEND_TYPE, sender_world, receiver_world,
 			       count, datatype, tag, 0, dest, is_inter ? 1 : 0, comm);
     } else {
-      record_small_event(ts, MPI_ISEND_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
+      record_small_event(ts, MPI_ISEND_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
     }
   }
   return rc;
@@ -681,7 +690,7 @@ int MPI_Ibsend(const void *buf, int count, MPI_Datatype datatype, int dest, int 
       register_pending_request(*request, MPI_IBSEND_TYPE, sender_world, receiver_world,
 			       count, datatype, tag, 0, dest, is_inter ? 1 : 0, comm);
     } else {
-      record_small_event(ts, MPI_IBSEND_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
+      record_small_event(ts, MPI_IBSEND_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
     }
   }
   return rc;
@@ -707,7 +716,7 @@ int MPI_Issend(const void *buf, int count, MPI_Datatype datatype, int dest, int 
       register_pending_request(*request, MPI_ISSEND_TYPE, sender_world, receiver_world,
 			       count, datatype, tag, 0, dest, is_inter ? 1 : 0, comm);
     } else {
-      record_small_event(ts, MPI_ISSEND_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
+      record_small_event(ts, MPI_ISSEND_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
     }
   }
   return rc;
@@ -733,7 +742,7 @@ int MPI_Irsend(const void *buf, int count, MPI_Datatype datatype, int dest, int 
       register_pending_request(*request, MPI_IRSEND_TYPE, sender_world, receiver_world,
 			       count, datatype, tag, 0, dest, is_inter ? 1 : 0, comm);
     } else {
-      record_small_event(ts, MPI_IRSEND_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
+      record_small_event(ts, MPI_IRSEND_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
     }
   }
   return rc;
@@ -761,7 +770,7 @@ int MPI_Irecv(void *buf, int count, MPI_Datatype datatype, int source, int tag, 
       register_pending_request(*request, MPI_IRECV_TYPE, sender_world, receiver_world,
 			       count, datatype, tag, 1, source, is_inter ? 1 : 0, comm);
     } else {
-      record_small_event(ts, MPI_IRECV_TYPE, PMPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
+      record_small_event(ts, MPI_IRECV_TYPE, MPI_Comm_c2f(comm), tag, sender_world, receiver_world, count, datatype);
     }
   }
   return rc;
@@ -799,7 +808,7 @@ int MPI_Sendrecv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, int 
       source_world = actual_source;
     }
 
-    record_large_event(ts, MPI_SENDRECV_TYPE, PMPI_Comm_c2f(comm), local_world, dest_world, sendcount, sendtype, sendtag, source_world, local_world, actual_recvcount, recvtype, recvtag);
+    record_large_event(ts, MPI_SENDRECV_TYPE, MPI_Comm_c2f(comm), local_world, dest_world, sendcount, sendtype, sendtag, source_world, local_world, actual_recvcount, recvtype, recvtag);
   }
 
   if (!c_status_is_ignore(status) && call_status == &local_status) *status = local_status;
@@ -829,7 +838,7 @@ int MPI_Wait(MPI_Request *request, MPI_Status *status) {
       complete_pending_request(tracked, call_status, !c_status_is_ignore(call_status), ts);
       completed = 1;
     }
-    record_small_event(ts, MPI_WAIT_TYPE, PMPI_Comm_c2f(tracked->comm_dup), tracked->tag, tracking_my_rank, tracking_my_rank, completed, MPI_DATATYPE_NULL);
+    record_small_event(ts, MPI_WAIT_TYPE, MPI_Comm_c2f(tracked->comm_id), tracked->tag, tracking_my_rank, tracking_my_rank, completed, MPI_DATATYPE_NULL);
   }
   return rc;
 }
@@ -987,7 +996,7 @@ int MPI_Test(MPI_Request *request, int *flag, MPI_Status *status) {
       complete_pending_request(tracked, call_status, !c_status_is_ignore(call_status), t_start);
       completed = 1;
     }
-    record_small_event(t_start, MPI_TEST_TYPE, MPI_Comm_c2f(tracked->comm_dup), tracked->tag, tracking_my_rank, tracking_my_rank, completed, duration_us);
+    record_small_event(t_start, MPI_TEST_TYPE, MPI_Comm_c2f(tracked->comm_id), tracked->tag, tracking_my_rank, tracking_my_rank, completed, duration_us);
   }
   return rc;
 }
@@ -1137,7 +1146,7 @@ int MPI_Barrier(MPI_Comm comm) {
     if (comm != MPI_COMM_WORLD && comm != MPI_COMM_NULL) {
       current_world_rank_in_comm(comm, &local_world);
     }
-    record_small_event(t_start, MPI_BARRIER_TYPE, PMPI_Comm_c2f(comm), 0, local_world, local_world, 0, duration_us);
+    record_small_event(t_start, MPI_BARRIER_TYPE, MPI_Comm_c2f(comm), 0, local_world, local_world, 0, duration_us);
   }
   return rc;
 }
@@ -1155,7 +1164,7 @@ int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm
       current_world_rank_in_comm(comm, &local_world);
       translate_comm_rank_to_world(comm, root, 0, &root_world);
     }
-    record_small_event(ts, MPI_BCAST_TYPE, PMPI_Comm_c2f(comm), 0, root_world, local_world, count, datatype);
+    record_small_event(ts, MPI_BCAST_TYPE, MPI_Comm_c2f(comm), 0, root_world, local_world, count, datatype);
   }
   return rc;
 }
@@ -1173,7 +1182,7 @@ int MPI_Reduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datat
       current_world_rank_in_comm(comm, &local_world);
       translate_comm_rank_to_world(comm, root, 0, &root_world);
     }
-    record_small_event(ts, MPI_REDUCE_TYPE, PMPI_Comm_c2f(comm), 0, local_world, root_world, count, datatype);
+    record_small_event(ts, MPI_REDUCE_TYPE, MPI_Comm_c2f(comm), 0, local_world, root_world, count, datatype);
   }
   return rc;
 }
@@ -1189,7 +1198,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     if (comm != MPI_COMM_WORLD && comm != MPI_COMM_NULL) {
       current_world_rank_in_comm(comm, &local_world);
     }
-    record_small_event(ts, MPI_ALLREDUCE_TYPE, PMPI_Comm_c2f(comm), 0, local_world, local_world, count, datatype);
+    record_small_event(ts, MPI_ALLREDUCE_TYPE, MPI_Comm_c2f(comm), 0, local_world, local_world, count, datatype);
   }
   return rc;
 }
@@ -1217,7 +1226,7 @@ int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *
       aggregate_recvcount = safe_mul_to_int(recvcount, comm_size);
     }
 
-    record_large_event(ts, MPI_GATHER_TYPE, PMPI_Comm_c2f(comm), local_world, root_world, sendcount, sendtype, 0, root_world, root_world, aggregate_recvcount, (aggregate_recvcount > 0) ? recvtype : MPI_DATATYPE_NULL, 0);
+    record_large_event(ts, MPI_GATHER_TYPE, MPI_Comm_c2f(comm), local_world, root_world, sendcount, sendtype, 0, root_world, root_world, aggregate_recvcount, (aggregate_recvcount > 0) ? recvtype : MPI_DATATYPE_NULL, 0);
   }
   return rc;
 }
@@ -1245,7 +1254,7 @@ int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void 
       aggregate_sendcount = safe_mul_to_int(sendcount, comm_size);
     }
 
-    record_large_event(ts, MPI_SCATTER_TYPE, PMPI_Comm_c2f(comm), root_world, root_world, aggregate_sendcount, (aggregate_sendcount > 0) ? sendtype : MPI_DATATYPE_NULL, 0, root_world, local_world, recvcount, recvtype, 0);
+    record_large_event(ts, MPI_SCATTER_TYPE, MPI_Comm_c2f(comm), root_world, root_world, aggregate_sendcount, (aggregate_sendcount > 0) ? sendtype : MPI_DATATYPE_NULL, 0, root_world, local_world, recvcount, recvtype, 0);
   }
   return rc;
 }
@@ -1267,7 +1276,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
     PMPI_Comm_size(comm, &comm_size);
     aggregate_recvcount = safe_mul_to_int(recvcount, comm_size);
 
-    record_large_event(ts, MPI_ALLGATHER_TYPE, PMPI_Comm_c2f(comm), local_world, local_world, sendcount, sendtype, 0, local_world, local_world, aggregate_recvcount, recvtype, 0);
+    record_large_event(ts, MPI_ALLGATHER_TYPE, MPI_Comm_c2f(comm), local_world, local_world, sendcount, sendtype, 0, local_world, local_world, aggregate_recvcount, recvtype, 0);
   }
   return rc;
 }
@@ -1389,7 +1398,7 @@ void mpi_finalize_f08_(int *ierr) { *ierr = MPI_Finalize(); }
 void MPI_FINALIZE(int *ierr) { mpi_finalize_(ierr); }
 
 void mpi_send_(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Send(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Send(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, MPI_Comm_f2c(*comm));
 }
 void mpi_send__(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) {
   mpi_send_(buf, count, datatype, dest, tag, comm, ierr);
@@ -1405,8 +1414,8 @@ void mpi_recv_(void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *source,
 #else
   MPI_Status *c_status_ptr = &c_status;
 #endif
-  *ierr = (MPI_Fint)MPI_Recv(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*source, (int)*tag, PMPI_Comm_f2c(*comm), c_status_ptr);
-  if (c_status_ptr != MPI_STATUS_IGNORE) PMPI_Status_c2f(&c_status, status);
+  *ierr = (MPI_Fint)MPI_Recv(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*source, (int)*tag, MPI_Comm_f2c(*comm), c_status_ptr);
+  if (c_status_ptr != MPI_STATUS_IGNORE) MPI_Status_c2f(&c_status, status);
 }
 void mpi_recv__(void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *source, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *status, MPI_Fint *ierr) {
   mpi_recv_(buf, count, datatype, source, tag, comm, status, ierr);
@@ -1417,7 +1426,7 @@ void MPI_RECV(void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *source, 
 
 void mpi_isend_(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
   MPI_Request c_req = MPI_REQUEST_NULL;
-  *ierr = (MPI_Fint)MPI_Isend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, PMPI_Comm_f2c(*comm), &c_req);
+  *ierr = (MPI_Fint)MPI_Isend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, MPI_Comm_f2c(*comm), &c_req);
   if (request != NULL) *request = PMPI_Request_c2f(c_req);
 }
 void mpi_isend__(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
@@ -1429,7 +1438,7 @@ void MPI_ISEND(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *d
 
 void mpi_ibsend_(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
   MPI_Request c_req = MPI_REQUEST_NULL;
-  *ierr = (MPI_Fint)MPI_Ibsend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, PMPI_Comm_f2c(*comm), &c_req);
+  *ierr = (MPI_Fint)MPI_Ibsend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, MPI_Comm_f2c(*comm), &c_req);
   if (request != NULL) *request = PMPI_Request_c2f(c_req);
 }
 void mpi_ibsend__(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
@@ -1441,7 +1450,7 @@ void MPI_IBSEND(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *
 
 void mpi_issend_(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
   MPI_Request c_req = MPI_REQUEST_NULL;
-  *ierr = (MPI_Fint)MPI_Issend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, PMPI_Comm_f2c(*comm), &c_req);
+  *ierr = (MPI_Fint)MPI_Issend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, MPI_Comm_f2c(*comm), &c_req);
   if (request != NULL) *request = PMPI_Request_c2f(c_req);
 }
 void mpi_issend__(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
@@ -1453,7 +1462,7 @@ void MPI_ISSEND(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *
 
 void mpi_irsend_(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
   MPI_Request c_req = MPI_REQUEST_NULL;
-  *ierr = (MPI_Fint)MPI_Irsend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, PMPI_Comm_f2c(*comm), &c_req);
+  *ierr = (MPI_Fint)MPI_Irsend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, MPI_Comm_f2c(*comm), &c_req);
   if (request != NULL) *request = PMPI_Request_c2f(c_req);
 }
 void mpi_irsend__(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
@@ -1465,7 +1474,7 @@ void MPI_IRSEND(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *
 
 void mpi_irecv_(void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *source, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
   MPI_Request c_req = MPI_REQUEST_NULL;
-  *ierr = (MPI_Fint)MPI_Irecv(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*source, (int)*tag, PMPI_Comm_f2c(*comm), &c_req);
+  *ierr = (MPI_Fint)MPI_Irecv(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*source, (int)*tag, MPI_Comm_f2c(*comm), &c_req);
   if (request != NULL) *request = PMPI_Request_c2f(c_req);
 }
 void mpi_irecv__(void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *source, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *request, MPI_Fint *ierr) {
@@ -1485,7 +1494,7 @@ void mpi_wait_(MPI_Fint *request, MPI_Fint *status, MPI_Fint *ierr) {
 #endif
   *ierr = (MPI_Fint)MPI_Wait(&c_req, c_status_ptr);
   if (request != NULL) *request = PMPI_Request_c2f(c_req);
-  if (c_status_ptr != MPI_STATUS_IGNORE && status != NULL) PMPI_Status_c2f(&c_status, status);
+  if (c_status_ptr != MPI_STATUS_IGNORE && status != NULL) MPI_Status_c2f(&c_status, status);
 }
 void mpi_wait__(MPI_Fint *request, MPI_Fint *status, MPI_Fint *ierr) { mpi_wait_(request, status, ierr); }
 void MPI_WAIT(MPI_Fint *request, MPI_Fint *status, MPI_Fint *ierr) { mpi_wait_(request, status, ierr); }
@@ -1502,7 +1511,7 @@ void mpi_test_(MPI_Fint *request, int *flag, MPI_Fint *status, MPI_Fint *ierr) {
   *ierr = (MPI_Fint)MPI_Test(&c_req, &c_flag, c_status_ptr);
   if (request != NULL) *request = PMPI_Request_c2f(c_req);
   if (flag != NULL) *flag = c_flag;
-  if (c_flag && c_status_ptr != MPI_STATUS_IGNORE && status != NULL) PMPI_Status_c2f(&c_status, status);
+  if (c_flag && c_status_ptr != MPI_STATUS_IGNORE && status != NULL) MPI_Status_c2f(&c_status, status);
 }
 void mpi_test__(MPI_Fint *request, int *flag, MPI_Fint *status, MPI_Fint *ierr) { mpi_test_(request, flag, status, ierr); }
 void MPI_TEST(MPI_Fint *request, int *flag, MPI_Fint *status, MPI_Fint *ierr) { mpi_test_(request, flag, status, ierr); }
@@ -1553,7 +1562,7 @@ void mpi_waitall_(MPI_Fint *count, MPI_Fint array_of_requests[], MPI_Fint array_
 	return;
       } 
       for (i = 0; i < n; i++) {
-	PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
+	MPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
       }
     }
   }
@@ -1612,7 +1621,7 @@ void mpi_waitany_(MPI_Fint *count, MPI_Fint array_of_requests[], MPI_Fint *index
   }
 
   if (c_status_ptr != MPI_STATUS_IGNORE && status != NULL && c_index != MPI_UNDEFINED) {
-    PMPI_Status_c2f(&c_status, status);
+    MPI_Status_c2f(&c_status, status);
   }
 
   free(c_requests);
@@ -1692,7 +1701,7 @@ void mpi_waitsome_(MPI_Fint *incount, MPI_Fint array_of_requests[], MPI_Fint *ou
       }
 
       if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
-	PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
+	MPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
       }
     }
   }
@@ -1763,7 +1772,7 @@ void mpi_testall_(MPI_Fint *count, MPI_Fint array_of_requests[], int *flag, MPI_
     }
 
     for (i = 0; i < n; i++) {
-      PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
+      MPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
     }
   }
 
@@ -1826,7 +1835,7 @@ void mpi_testany_(MPI_Fint *count, MPI_Fint array_of_requests[], MPI_Fint *index
   }
 
   if (c_flag && c_status_ptr != MPI_STATUS_IGNORE && status != NULL && c_index != MPI_UNDEFINED) {
-    PMPI_Status_c2f(&c_status, status);
+    MPI_Status_c2f(&c_status, status);
   }
 
   free(c_requests);
@@ -1906,7 +1915,7 @@ void mpi_testsome_(MPI_Fint *incount, MPI_Fint array_of_requests[], MPI_Fint *ou
       }
 
       if (c_status_ptr != MPI_STATUSES_IGNORE && array_of_statuses != NULL) {
-	PMPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
+	MPI_Status_c2f(&c_statuses[i], &array_of_statuses[i * f_status_size]);
       }
     }
   }
@@ -1925,19 +1934,19 @@ void MPI_TESTSOME(MPI_Fint *incount, MPI_Fint array_of_requests[], MPI_Fint *out
 }
 
 void mpi_bsend_(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Bsend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Bsend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, MPI_Comm_f2c(*comm));
 }
 void mpi_bsend__(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) { mpi_bsend_(buf, count, datatype, dest, tag, comm, ierr); }
 void MPI_BSEND(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) { mpi_bsend_(buf, count, datatype, dest, tag, comm, ierr); }
 
 void mpi_ssend_(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Ssend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Ssend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, MPI_Comm_f2c(*comm));
 }
 void mpi_ssend__(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) { mpi_ssend_(buf, count, datatype, dest, tag, comm, ierr); }
 void MPI_SSEND(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) { mpi_ssend_(buf, count, datatype, dest, tag, comm, ierr); }
 
 void mpi_rsend_(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Rsend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Rsend(buf, (int)*count, PMPI_Type_f2c(*datatype), (int)*dest, (int)*tag, MPI_Comm_f2c(*comm));
 }
 void mpi_rsend__(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) { mpi_rsend_(buf, count, datatype, dest, tag, comm, ierr); }
 void MPI_RSEND(const void *buf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *dest, MPI_Fint *tag, MPI_Fint *comm, MPI_Fint *ierr) { mpi_rsend_(buf, count, datatype, dest, tag, comm, ierr); }
@@ -1949,50 +1958,50 @@ void mpi_sendrecv_(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype,
 #else
   MPI_Status *c_status_ptr = &c_status;
 #endif
-  *ierr = (MPI_Fint)MPI_Sendrecv(sendbuf, (int)*sendcount, PMPI_Type_f2c(*sendtype), (int)*dest, (int)*sendtag, recvbuf, (int)*recvcount, PMPI_Type_f2c(*recvtype), (int)*source, (int)*recvtag, PMPI_Comm_f2c(*comm), c_status_ptr);
-  if (c_status_ptr != MPI_STATUS_IGNORE && status != NULL) PMPI_Status_c2f(&c_status, status);
+  *ierr = (MPI_Fint)MPI_Sendrecv(sendbuf, (int)*sendcount, PMPI_Type_f2c(*sendtype), (int)*dest, (int)*sendtag, recvbuf, (int)*recvcount, PMPI_Type_f2c(*recvtype), (int)*source, (int)*recvtag, MPI_Comm_f2c(*comm), c_status_ptr);
+  if (c_status_ptr != MPI_STATUS_IGNORE && status != NULL) MPI_Status_c2f(&c_status, status);
 }
 void mpi_sendrecv__(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, MPI_Fint *dest, MPI_Fint *sendtag, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *source, MPI_Fint *recvtag, MPI_Fint *comm, MPI_Fint *status, MPI_Fint *ierr) { mpi_sendrecv_(sendbuf, sendcount, sendtype, dest, sendtag, recvbuf, recvcount, recvtype, source, recvtag, comm, status, ierr); }
 void MPI_SENDRECV(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, MPI_Fint *dest, MPI_Fint *sendtag, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *source, MPI_Fint *recvtag, MPI_Fint *comm, MPI_Fint *status, MPI_Fint *ierr) { mpi_sendrecv_(sendbuf, sendcount, sendtype, dest, sendtag, recvbuf, recvcount, recvtype, source, recvtag, comm, status, ierr); }
 
 void mpi_barrier_(MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Barrier(PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Barrier(MPI_Comm_f2c(*comm));
 }
 void mpi_barrier__(MPI_Fint *comm, MPI_Fint *ierr) { mpi_barrier_(comm, ierr); }
 void MPI_BARRIER(MPI_Fint *comm, MPI_Fint *ierr) { mpi_barrier_(comm, ierr); }
 
 void mpi_bcast_(void *buffer, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Bcast(buffer, (int)*count, PMPI_Type_f2c(*datatype), (int)*root, PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Bcast(buffer, (int)*count, PMPI_Type_f2c(*datatype), (int)*root, MPI_Comm_f2c(*comm));
 }
 void mpi_bcast__(void *buffer, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) { mpi_bcast_(buffer, count, datatype, root, comm, ierr); }
 void MPI_BCAST(void *buffer, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) { mpi_bcast_(buffer, count, datatype, root, comm, ierr); }
 
 void mpi_reduce_(const void *sendbuf, void *recvbuf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *op, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Reduce(sendbuf, recvbuf, (int)*count, PMPI_Type_f2c(*datatype), PMPI_Op_f2c(*op), (int)*root, PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Reduce(sendbuf, recvbuf, (int)*count, PMPI_Type_f2c(*datatype), PMPI_Op_f2c(*op), (int)*root, MPI_Comm_f2c(*comm));
 }
 void mpi_reduce__(const void *sendbuf, void *recvbuf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *op, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) { mpi_reduce_(sendbuf, recvbuf, count, datatype, op, root, comm, ierr); }
 void MPI_REDUCE(const void *sendbuf, void *recvbuf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *op, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) { mpi_reduce_(sendbuf, recvbuf, count, datatype, op, root, comm, ierr); }
 
 void mpi_allreduce_(const void *sendbuf, void *recvbuf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *op, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Allreduce(sendbuf, recvbuf, (int)*count, PMPI_Type_f2c(*datatype), PMPI_Op_f2c(*op), PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Allreduce(sendbuf, recvbuf, (int)*count, PMPI_Type_f2c(*datatype), PMPI_Op_f2c(*op), MPI_Comm_f2c(*comm));
 }
 void mpi_allreduce__(const void *sendbuf, void *recvbuf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *op, MPI_Fint *comm, MPI_Fint *ierr) { mpi_allreduce_(sendbuf, recvbuf, count, datatype, op, comm, ierr); }
 void MPI_ALLREDUCE(const void *sendbuf, void *recvbuf, MPI_Fint *count, MPI_Fint *datatype, MPI_Fint *op, MPI_Fint *comm, MPI_Fint *ierr) { mpi_allreduce_(sendbuf, recvbuf, count, datatype, op, comm, ierr); }
 
 void mpi_gather_(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Gather(sendbuf, (int)*sendcount, PMPI_Type_f2c(*sendtype), recvbuf, (int)*recvcount, PMPI_Type_f2c(*recvtype), (int)*root, PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Gather(sendbuf, (int)*sendcount, PMPI_Type_f2c(*sendtype), recvbuf, (int)*recvcount, PMPI_Type_f2c(*recvtype), (int)*root, MPI_Comm_f2c(*comm));
 }
 void mpi_gather__(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) { mpi_gather_(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm, ierr); }
 void MPI_GATHER(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) { mpi_gather_(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm, ierr); }
 
 void mpi_scatter_(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Scatter(sendbuf, (int)*sendcount, PMPI_Type_f2c(*sendtype), recvbuf, (int)*recvcount, PMPI_Type_f2c(*recvtype), (int)*root, PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Scatter(sendbuf, (int)*sendcount, PMPI_Type_f2c(*sendtype), recvbuf, (int)*recvcount, PMPI_Type_f2c(*recvtype), (int)*root, MPI_Comm_f2c(*comm));
 }
 void mpi_scatter__(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) { mpi_scatter_(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm, ierr); }
 void MPI_SCATTER(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *root, MPI_Fint *comm, MPI_Fint *ierr) { mpi_scatter_(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm, ierr); }
 
 void mpi_allgather_(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *comm, MPI_Fint *ierr) {
-  *ierr = (MPI_Fint)MPI_Allgather(sendbuf, (int)*sendcount, PMPI_Type_f2c(*sendtype), recvbuf, (int)*recvcount, PMPI_Type_f2c(*recvtype), PMPI_Comm_f2c(*comm));
+  *ierr = (MPI_Fint)MPI_Allgather(sendbuf, (int)*sendcount, PMPI_Type_f2c(*sendtype), recvbuf, (int)*recvcount, PMPI_Type_f2c(*recvtype), MPI_Comm_f2c(*comm));
 }
 void mpi_allgather__(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *comm, MPI_Fint *ierr) { mpi_allgather_(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, ierr); }
 void MPI_ALLGATHER(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype, void *recvbuf, MPI_Fint *recvcount, MPI_Fint *recvtype, MPI_Fint *comm, MPI_Fint *ierr) { mpi_allgather_(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, ierr); }

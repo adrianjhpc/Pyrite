@@ -116,8 +116,9 @@ extern "C" {
     int is_recv;
     int source_rank_param;
     int peer_is_remote_group;
-    MPI_Comm comm_dup;
-    int have_comm_dup;
+    MPI_Group group;
+    int have_group;
+    int comm_id; 
     struct pending_request *next;
   } pending_request_t;
   
