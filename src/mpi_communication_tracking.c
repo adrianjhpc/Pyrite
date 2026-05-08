@@ -1308,7 +1308,7 @@ int MPI_Testsome(int incount, MPI_Request array_of_requests[], int *outcount, in
             }
         }
 
-        record_control_event(t_end, MPI_TESTSOME_TYPE, control_meta_comm(&meta), control_meta_tag(&meta), tracking_my_rank, completed);
+        record_control_event(t_start, MPI_TESTSOME_TYPE, control_meta_comm(&meta), control_meta_tag(&meta), tracking_my_rank, completed);
     }
 
     free(pre_handles);
