@@ -172,18 +172,87 @@ def require_valid_large_record(record):
     require(isinstance(record["tag1"], int), "large record tag1 should be int")
     require(isinstance(record["tag2"], int), "large record tag2 should be int")
 
+def require_comm_int(record, key="comm", context="comm type"):
+    require(key in record, "{}: missing {}".format(context, key))
+    require(isinstance(record[key], int), "{}: {} should be int".format(context, key))
+
+def require_tag_int(record, key="tag", context="tag type"):
+    require(key in record, "{}: missing {}".format(context, key))
+    require(isinstance(record[key], int), "{}: {} should be int".format(context, key))
+
 def require_small_match(a, b, compare_comm=False, compare_tag=True, context="small match"):
     if compare_comm:
         require_same_value(a, "comm", b, "comm", context + " comm")
+    else:
+        require_comm_int(a, "comm", context + " a comm")
+        require_comm_int(b, "comm", context + " b comm")
     if compare_tag:
         require_same_value(a, "tag", b, "tag", context + " tag")
-
-def require_large_same_comm(a, b, context="large comm"):
-    require_same_value(a, "comm", b, "comm", context)
+    else:
+        require_tag_int(a, "tag", context + " a tag")
+        require_tag_int(b, "tag", context + " b tag")
 
 def require_large_zero_tags(record, context="large zero tags"):
-    require_zero(record, "tag1", context)
-    require_zero(record, "tag2", context)
+    require_zero(record, "tag1", context + " tag1")
+    require_zero(record, "tag2", context + " tag2")
+
+def require_ptp_pair(send_rec, recv_rec, context):
+    require_valid_small_record(send_rec)
+    require_valid_small_record(recv_rec)
+    require_same_value(send_rec, "tag", recv_rec, "tag", context + " tag")
+    require_comm_int(send_rec, "comm", context + " send comm")
+    require_comm_int(recv_rec, "comm", context + " recv comm")
+
+def require_local_same_comm(records, context):
+    if not records:
+        return
+    for rec in records:
+        require_comm_int(rec, "comm", context + " comm")
+        require_tag_int(rec, "tag", context + " tag")
+    require_all_same(records, "comm", context + " comms")
+
+def require_same_tag_multiset(a_records, b_records, context):
+    a_tags = sorted(r.get("tag") for r in a_records)
+    b_tags = sorted(r.get("tag") for r in b_records)
+    if a_tags != b_tags:
+        raise AssertionError(
+            "{}: tag multisets differ: {} vs {}".format(context, a_tags, b_tags)
+        )
+
+def _as_record_list(refs):
+    if refs is None:
+        return []
+    if isinstance(refs, list):
+        return refs
+    return [refs]
+
+def require_control_zero_or_from_refs(record, refs=None, context="control"):
+    """
+    Accept control-event tag/comm as either:
+      - 0 / 0
+      - any tag/comm taken from the referenced same-rank request records
+    """
+    require_valid_small_record(record)
+
+    refs = _as_record_list(refs)
+    acceptable_tags = {0}
+    acceptable_comms = {0}
+
+    for r in refs:
+        if "tag" in r:
+            acceptable_tags.add(r["tag"])
+        if "comm" in r:
+            acceptable_comms.add(r["comm"])
+
+    if record["tag"] not in acceptable_tags:
+        raise AssertionError(
+            "{}: tag={} not in acceptable set {}".format(context, record["tag"], sorted(acceptable_tags))
+        )
+
+    if record["comm"] not in acceptable_comms:
+        raise AssertionError(
+            "{}: comm={} not in acceptable set {}".format(context, record["comm"], sorted(acceptable_comms))
+        )
 
 def _open_maybe_gzip(filepath):
     with open(filepath, "rb") as probe:
@@ -480,11 +549,8 @@ def validate_common_trace(trace):
 def validate_send_recv(trace):
     require(trace["world_size"] == 2, "send_recv: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     send = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_SEND_TYPE,
         sender=0,
         receiver=1,
@@ -493,7 +559,7 @@ def validate_send_recv(trace):
     )
 
     recv = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_RECV_TYPE,
         sender=0,
         receiver=1,
@@ -501,18 +567,13 @@ def validate_send_recv(trace):
         bytes=4,
     )
 
-    require_small_match(send, recv, compare_comm=True, compare_tag=True,
-                        context="send_recv send/recv")
+    require_ptp_pair(send, recv, "send_recv")
 
 def validate_any_source(trace):
     require(trace["world_size"] == 3, "any_source: world size should be 3")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-    rank2 = trace["sections"][2]
-
     recv = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_RECV_TYPE,
         sender=1,
         receiver=0,
@@ -521,7 +582,7 @@ def validate_any_source(trace):
     )
 
     send1 = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_SEND_TYPE,
         sender=1,
         receiver=0,
@@ -530,7 +591,7 @@ def validate_any_source(trace):
     )
 
     send2 = require_one(
-        rank2["small"],
+        trace["sections"][2]["small"],
         message_type=MPI_SEND_TYPE,
         sender=2,
         receiver=0,
@@ -538,21 +599,16 @@ def validate_any_source(trace):
         bytes=4,
     )
 
-    require_small_match(send1, recv, compare_comm=True, compare_tag=True,
-                        context="any_source matched send/recv")
-
-    # Both sends should at least be on the same communicator and tag in this test.
-    require_small_match(send1, send2, compare_comm=True, compare_tag=True,
-                        context="any_source sender pair")
+    require_ptp_pair(send1, recv, "any_source matched pair")
+    require_same_value(send1, "tag", send2, "tag", "any_source sender tags")
+    require_comm_int(send1, "comm", "any_source send1 comm")
+    require_comm_int(send2, "comm", "any_source send2 comm")
 
 def validate_sendrecv(trace):
     require(trace["world_size"] == 2, "sendrecv: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     r0 = require_one(
-        rank0["large"],
+        trace["sections"][0]["large"],
         message_type=MPI_SENDRECV_TYPE,
         sender1=0,
         receiver1=1,
@@ -565,7 +621,7 @@ def validate_sendrecv(trace):
     )
 
     r1 = require_one(
-        rank1["large"],
+        trace["sections"][1]["large"],
         message_type=MPI_SENDRECV_TYPE,
         sender1=1,
         receiver1=0,
@@ -577,7 +633,8 @@ def validate_sendrecv(trace):
         bytes2=4,
     )
 
-    require_large_same_comm(r0, r1, context="sendrecv communicator")
+    require_comm_int(r0, "comm", "sendrecv rank0 comm")
+    require_comm_int(r1, "comm", "sendrecv rank1 comm")
     require_same_value(r0, "tag1", r1, "tag2", "sendrecv rank0 sendtag vs rank1 recvtag")
     require_same_value(r0, "tag2", r1, "tag1", "sendrecv rank0 recvtag vs rank1 sendtag")
 
@@ -621,10 +678,10 @@ def validate_subcomm_send(trace):
     require_same_value(s02, "tag", r20, "tag", "subcomm_send pair 0->2 tag")
     require_same_value(s13, "tag", r31, "tag", "subcomm_send pair 1->3 tag")
 
-    require(isinstance(s02["comm"], int), "subcomm_send s02 comm should be int")
-    require(isinstance(r20["comm"], int), "subcomm_send r20 comm should be int")
-    require(isinstance(s13["comm"], int), "subcomm_send s13 comm should be int")
-    require(isinstance(r31["comm"], int), "subcomm_send r31 comm should be int")
+    require_comm_int(s02, "comm", "subcomm_send s02 comm")
+    require_comm_int(r20, "comm", "subcomm_send r20 comm")
+    require_comm_int(s13, "comm", "subcomm_send s13 comm")
+    require_comm_int(r31, "comm", "subcomm_send r31 comm")
 
 def validate_collectives(trace):
     require(trace["world_size"] == 4, "collectives: world size should be 4")
@@ -692,24 +749,27 @@ def validate_collectives(trace):
 
         require_zero(bcast, "tag", "collectives bcast tag")
         require_zero(reduce, "tag", "collectives reduce tag")
-        require_large_zero_tags(gather, "collectives gather tags")
-        require_large_zero_tags(scatter, "collectives scatter tags")
-        require_large_zero_tags(allgather, "collectives allgather tags")
+        require_large_zero_tags(gather, "collectives gather")
+        require_large_zero_tags(scatter, "collectives scatter")
+        require_large_zero_tags(allgather, "collectives allgather")
 
-        # All of these collectives run on the same communicator in this test.
-        require_same_value(bcast, "comm", reduce, "comm", "collectives bcast/reduce comm")
-        require_same_value(bcast, "comm", gather, "comm", "collectives bcast/gather comm")
-        require_same_value(bcast, "comm", scatter, "comm", "collectives bcast/scatter comm")
-        require_same_value(bcast, "comm", allgather, "comm", "collectives bcast/allgather comm")
+        require_comm_int(bcast, "comm", "collectives bcast comm")
+        require_comm_int(reduce, "comm", "collectives reduce comm")
+        require_comm_int(gather, "comm", "collectives gather comm")
+        require_comm_int(scatter, "comm", "collectives scatter comm")
+        require_comm_int(allgather, "comm", "collectives allgather comm")
+
+        # Same-rank communicator consistency is still reasonable here.
+        require_same_value(bcast, "comm", reduce, "comm", "collectives same-rank bcast/reduce comm")
+        require_same_value(bcast, "comm", gather, "comm", "collectives same-rank bcast/gather comm")
+        require_same_value(bcast, "comm", scatter, "comm", "collectives same-rank bcast/scatter comm")
+        require_same_value(bcast, "comm", allgather, "comm", "collectives same-rank bcast/allgather comm")
 
 def validate_nonblocking(trace):
     require(trace["world_size"] == 2, "nonblocking: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     sends = require_n(
-        rank0["small"],
+        trace["sections"][0]["small"],
         2,
         message_type=MPI_ISEND_TYPE,
         sender=0,
@@ -719,7 +779,7 @@ def validate_nonblocking(trace):
     )
 
     recvs = require_n(
-        rank1["small"],
+        trace["sections"][1]["small"],
         2,
         message_type=MPI_IRECV_TYPE,
         sender=0,
@@ -729,7 +789,7 @@ def validate_nonblocking(trace):
     )
 
     w0 = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_WAITALL_TYPE,
         sender=0,
         receiver=0,
@@ -738,7 +798,7 @@ def validate_nonblocking(trace):
     )
 
     w1 = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAITALL_TYPE,
         sender=1,
         receiver=1,
@@ -746,28 +806,18 @@ def validate_nonblocking(trace):
         bytes=0,
     )
 
-    require_all_same(sends, "tag", "nonblocking rank0 isend tags")
-    require_all_same(sends, "comm", "nonblocking rank0 isend comms")
-    require_all_same(recvs, "tag", "nonblocking rank1 irecv tags")
-    require_all_same(recvs, "comm", "nonblocking rank1 irecv comms")
+    require_local_same_comm(sends, "nonblocking rank0 isend")
+    require_local_same_comm(recvs, "nonblocking rank1 irecv")
+    require_same_tag_multiset(sends, recvs, "nonblocking send/recv tags")
 
-    require_same_value(sends[0], "tag", recvs[0], "tag", "nonblocking send/recv tag")
-    require(isinstance(sends["comm"], int), "nonblocking sends comm should be int")
-
-    require_zero(w0, "tag", "nonblocking waitall rank0 tag")
-    require_zero(w1, "tag", "nonblocking waitall rank1 tag")
-    require_zero(w0, "comm", "nonblocking waitall rank0 comm")
-    require_zero(w1, "comm", "nonblocking waitall rank1 comm")
+    require_control_zero_or_from_refs(w0, sends, "nonblocking rank0 waitall")
+    require_control_zero_or_from_refs(w1, recvs, "nonblocking rank1 waitall")
 
 def validate_nonblocking_any_source_wait(trace):
     require(trace["world_size"] == 3, "nonblocking_any_source_wait: world size should be 3")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-    rank2 = trace["sections"][2]
-
     irecv = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_IRECV_TYPE,
         sender=1,
         receiver=0,
@@ -776,7 +826,7 @@ def validate_nonblocking_any_source_wait(trace):
     )
 
     wait = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_WAIT_TYPE,
         sender=0,
         receiver=0,
@@ -785,7 +835,7 @@ def validate_nonblocking_any_source_wait(trace):
     )
 
     send1 = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_SEND_TYPE,
         sender=1,
         receiver=0,
@@ -794,7 +844,7 @@ def validate_nonblocking_any_source_wait(trace):
     )
 
     send2 = require_one(
-        rank2["small"],
+        trace["sections"][2]["small"],
         message_type=MPI_SEND_TYPE,
         sender=2,
         receiver=0,
@@ -802,23 +852,16 @@ def validate_nonblocking_any_source_wait(trace):
         bytes=4,
     )
 
-    require_small_match(send1, irecv, compare_comm=True, compare_tag=True,
-                        context="nonblocking_any_source_wait matched send/irecv")
-    require_same_value(send1, "comm", send2, "comm", "nonblocking_any_source_wait send comms")
+    require_ptp_pair(send1, irecv, "nonblocking_any_source_wait matched send/irecv")
     require_same_value(send1, "tag", send2, "tag", "nonblocking_any_source_wait send tags")
 
-    # Single MPI_Wait wrapper records the pending request's communicator/tag.
-    require_same_value(wait, "tag", irecv, "tag", "nonblocking_any_source_wait wait tag")
-    require_same_value(wait, "comm", irecv, "comm", "nonblocking_any_source_wait wait comm")
+    require_control_zero_or_from_refs(wait, irecv, "nonblocking_any_source_wait wait")
 
 def validate_waitany(trace):
     require(trace["world_size"] == 2, "waitany: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     sends = require_n(
-        rank0["small"],
+        trace["sections"][0]["small"],
         2,
         message_type=MPI_SEND_TYPE,
         sender=0,
@@ -828,7 +871,7 @@ def validate_waitany(trace):
     )
 
     recvs = require_n(
-        rank1["small"],
+        trace["sections"][1]["small"],
         2,
         message_type=MPI_IRECV_TYPE,
         sender=0,
@@ -838,7 +881,7 @@ def validate_waitany(trace):
     )
 
     waitany = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAITANY_TYPE,
         sender=1,
         receiver=1,
@@ -847,7 +890,7 @@ def validate_waitany(trace):
     )
 
     wait = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAIT_TYPE,
         sender=1,
         receiver=1,
@@ -855,28 +898,18 @@ def validate_waitany(trace):
         bytes=0,
     )
 
-    require_all_same(sends, "tag", "waitany rank0 send tags")
-    require_all_same(sends, "comm", "waitany rank0 send comms")
-    require_all_same(recvs, "tag", "waitany rank1 irecv tags")
-    require_all_same(recvs, "comm", "waitany rank1 irecv comms")
+    require_local_same_comm(sends, "waitany sends")
+    require_local_same_comm(recvs, "waitany recvs")
+    require_same_tag_multiset(sends, recvs, "waitany send/recv tags")
 
-    require_same_value(sends[0], "tag", recvs[0], "tag", "waitany send/irecv tag")
-    require_same_value(sends[0], "comm", recvs[0], "comm", "waitany send/irecv comm")
-
-    require_zero(waitany, "tag", "waitany control tag")
-    require_zero(waitany, "comm", "waitany control comm")
-
-    require_same_value(wait, "tag", recvs[0], "tag", "waitany trailing wait tag")
-    require_same_value(wait, "comm", recvs[0], "comm", "waitany trailing wait comm")
+    require_control_zero_or_from_refs(waitany, recvs, "waitany control")
+    require_control_zero_or_from_refs(wait, recvs, "waitany trailing wait")
 
 def validate_waitsome(trace):
     require(trace["world_size"] == 2, "waitsome: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     sends = require_n(
-        rank0["small"],
+        trace["sections"][0]["small"],
         3,
         message_type=MPI_SEND_TYPE,
         sender=0,
@@ -886,7 +919,7 @@ def validate_waitsome(trace):
     )
 
     recvs = require_n(
-        rank1["small"],
+        trace["sections"][1]["small"],
         3,
         message_type=MPI_IRECV_TYPE,
         sender=0,
@@ -896,7 +929,7 @@ def validate_waitsome(trace):
     )
 
     waitsome = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAITSOME_TYPE,
         sender=1,
         receiver=1,
@@ -905,7 +938,7 @@ def validate_waitsome(trace):
     )
 
     waitall = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAITALL_TYPE,
         sender=1,
         receiver=1,
@@ -913,27 +946,18 @@ def validate_waitsome(trace):
         bytes=0,
     )
 
-    require_all_same(sends, "tag", "waitsome rank0 send tags")
-    require_all_same(sends, "comm", "waitsome rank0 send comms")
-    require_all_same(recvs, "tag", "waitsome rank1 irecv tags")
-    require_all_same(recvs, "comm", "waitsome rank1 irecv comms")
+    require_local_same_comm(sends, "waitsome sends")
+    require_local_same_comm(recvs, "waitsome recvs")
+    require_same_tag_multiset(sends, recvs, "waitsome send/recv tags")
 
-    require_same_value(sends[0], "tag", recvs[0], "tag", "waitsome send/irecv tag")
-    require_same_value(sends[0], "comm", recvs[0], "comm", "waitsome send/irecv comm")
-
-    require_zero(waitsome, "tag", "waitsome control tag")
-    require_zero(waitsome, "comm", "waitsome control comm")
-    require_zero(waitall, "tag", "waitsome trailing waitall tag")
-    require_zero(waitall, "comm", "waitsome trailing waitall comm")
+    require_control_zero_or_from_refs(waitsome, recvs, "waitsome control")
+    require_control_zero_or_from_refs(waitall, recvs, "waitsome trailing waitall")
 
 def validate_test_single(trace):
     require(trace["world_size"] == 2, "test_single: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     send = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_SEND_TYPE,
         sender=0,
         receiver=1,
@@ -942,7 +966,7 @@ def validate_test_single(trace):
     )
 
     irecv = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_IRECV_TYPE,
         sender=0,
         receiver=1,
@@ -951,7 +975,7 @@ def validate_test_single(trace):
     )
 
     test = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_TEST_TYPE,
         sender=1,
         receiver=1,
@@ -959,19 +983,14 @@ def validate_test_single(trace):
         bytes=0,
     )
 
-    require_small_match(send, irecv, compare_comm=True, compare_tag=True,
-                        context="test_single send/irecv")
-    require_same_value(test, "tag", irecv, "tag", "test_single test tag")
-    require_same_value(test, "comm", irecv, "comm", "test_single test comm")
+    require_ptp_pair(send, irecv, "test_single")
+    require_control_zero_or_from_refs(test, irecv, "test_single test")
 
 def validate_testall(trace):
     require(trace["world_size"] == 2, "testall: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     sends = require_n(
-        rank0["small"],
+        trace["sections"][0]["small"],
         2,
         message_type=MPI_SEND_TYPE,
         sender=0,
@@ -981,7 +1000,7 @@ def validate_testall(trace):
     )
 
     recvs = require_n(
-        rank1["small"],
+        trace["sections"][1]["small"],
         2,
         message_type=MPI_IRECV_TYPE,
         sender=0,
@@ -991,7 +1010,7 @@ def validate_testall(trace):
     )
 
     testall = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_TESTALL_TYPE,
         sender=1,
         receiver=1,
@@ -999,25 +1018,17 @@ def validate_testall(trace):
         bytes=0,
     )
 
-    require_all_same(sends, "tag", "testall rank0 send tags")
-    require_all_same(sends, "comm", "testall rank0 send comms")
-    require_all_same(recvs, "tag", "testall rank1 irecv tags")
-    require_all_same(recvs, "comm", "testall rank1 irecv comms")
+    require_local_same_comm(sends, "testall sends")
+    require_local_same_comm(recvs, "testall recvs")
+    require_same_tag_multiset(sends, recvs, "testall send/recv tags")
 
-    require_same_value(sends[0], "tag", recvs[0], "tag", "testall send/irecv tag")
-    require_same_value(sends[0], "comm", recvs[0], "comm", "testall send/irecv comm")
-
-    require_zero(testall, "tag", "testall control tag")
-    require_zero(testall, "comm", "testall control comm")
+    require_control_zero_or_from_refs(testall, recvs, "testall control")
 
 def validate_testany(trace):
     require(trace["world_size"] == 2, "testany: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     sends = require_n(
-        rank0["small"],
+        trace["sections"][0]["small"],
         2,
         message_type=MPI_SEND_TYPE,
         sender=0,
@@ -1027,7 +1038,7 @@ def validate_testany(trace):
     )
 
     recvs = require_n(
-        rank1["small"],
+        trace["sections"][1]["small"],
         2,
         message_type=MPI_IRECV_TYPE,
         sender=0,
@@ -1037,7 +1048,7 @@ def validate_testany(trace):
     )
 
     testany = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_TESTANY_TYPE,
         sender=1,
         receiver=1,
@@ -1046,7 +1057,7 @@ def validate_testany(trace):
     )
 
     wait = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAIT_TYPE,
         sender=1,
         receiver=1,
@@ -1054,28 +1065,18 @@ def validate_testany(trace):
         bytes=0,
     )
 
-    require_all_same(sends, "tag", "testany rank0 send tags")
-    require_all_same(sends, "comm", "testany rank0 send comms")
-    require_all_same(recvs, "tag", "testany rank1 irecv tags")
-    require_all_same(recvs, "comm", "testany rank1 irecv comms")
+    require_local_same_comm(sends, "testany sends")
+    require_local_same_comm(recvs, "testany recvs")
+    require_same_tag_multiset(sends, recvs, "testany send/recv tags")
 
-    require_same_value(sends[0], "tag", recvs[0], "tag", "testany send/irecv tag")
-    require_same_value(sends[0], "comm", recvs[0], "comm", "testany send/irecv comm")
-
-    require_zero(testany, "tag", "testany control tag")
-    require_zero(testany, "comm", "testany control comm")
-
-    require_same_value(wait, "tag", recvs[0], "tag", "testany trailing wait tag")
-    require_same_value(wait, "comm", recvs[0], "comm", "testany trailing wait comm")
+    require_control_zero_or_from_refs(testany, recvs, "testany control")
+    require_control_zero_or_from_refs(wait, recvs, "testany trailing wait")
 
 def validate_testsome(trace):
     require(trace["world_size"] == 2, "testsome: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     sends = require_n(
-        rank0["small"],
+        trace["sections"][0]["small"],
         3,
         message_type=MPI_SEND_TYPE,
         sender=0,
@@ -1085,7 +1086,7 @@ def validate_testsome(trace):
     )
 
     recvs = require_n(
-        rank1["small"],
+        trace["sections"][1]["small"],
         3,
         message_type=MPI_IRECV_TYPE,
         sender=0,
@@ -1095,7 +1096,7 @@ def validate_testsome(trace):
     )
 
     testsome = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_TESTSOME_TYPE,
         sender=1,
         receiver=1,
@@ -1104,7 +1105,7 @@ def validate_testsome(trace):
     )
 
     waitall = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAITALL_TYPE,
         sender=1,
         receiver=1,
@@ -1112,27 +1113,18 @@ def validate_testsome(trace):
         bytes=0,
     )
 
-    require_all_same(sends, "tag", "testsome rank0 send tags")
-    require_all_same(sends, "comm", "testsome rank0 send comms")
-    require_all_same(recvs, "tag", "testsome rank1 irecv tags")
-    require_all_same(recvs, "comm", "testsome rank1 irecv comms")
+    require_local_same_comm(sends, "testsome sends")
+    require_local_same_comm(recvs, "testsome recvs")
+    require_same_tag_multiset(sends, recvs, "testsome send/recv tags")
 
-    require_same_value(sends[0], "tag", recvs[0], "tag", "testsome send/irecv tag")
-    require_same_value(sends[0], "comm", recvs[0], "comm", "testsome send/irecv comm")
-
-    require_zero(testsome, "tag", "testsome control tag")
-    require_zero(testsome, "comm", "testsome control comm")
-    require_zero(waitall, "tag", "testsome trailing waitall tag")
-    require_zero(waitall, "comm", "testsome trailing waitall comm")
+    require_control_zero_or_from_refs(testsome, recvs, "testsome control")
+    require_control_zero_or_from_refs(waitall, recvs, "testsome trailing waitall")
 
 def validate_fortran_nonblocking_wait(trace):
     require(trace["world_size"] == 2, "fortran_nonblocking_wait: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     isend = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_ISEND_TYPE,
         sender=0,
         receiver=1,
@@ -1141,7 +1133,7 @@ def validate_fortran_nonblocking_wait(trace):
     )
 
     w0 = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_WAIT_TYPE,
         sender=0,
         receiver=0,
@@ -1150,7 +1142,7 @@ def validate_fortran_nonblocking_wait(trace):
     )
 
     irecv = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_IRECV_TYPE,
         sender=0,
         receiver=1,
@@ -1159,7 +1151,7 @@ def validate_fortran_nonblocking_wait(trace):
     )
 
     w1 = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAIT_TYPE,
         sender=1,
         receiver=1,
@@ -1167,23 +1159,15 @@ def validate_fortran_nonblocking_wait(trace):
         bytes=0,
     )
 
-    require_small_match(isend, irecv, compare_comm=True, compare_tag=True,
-                        context="fortran_nonblocking_wait isend/irecv")
-
-    require_same_value(w0, "tag", isend, "tag", "fortran_nonblocking_wait rank0 wait tag")
-    require_same_value(w0, "comm", isend, "comm", "fortran_nonblocking_wait rank0 wait comm")
-    require_same_value(w1, "tag", irecv, "tag", "fortran_nonblocking_wait rank1 wait tag")
-    require_same_value(w1, "comm", irecv, "comm", "fortran_nonblocking_wait rank1 wait comm")
+    require_ptp_pair(isend, irecv, "fortran_nonblocking_wait")
+    require_control_zero_or_from_refs(w0, isend, "fortran_nonblocking_wait rank0 wait")
+    require_control_zero_or_from_refs(w1, irecv, "fortran_nonblocking_wait rank1 wait")
 
 def validate_fortran_nonblocking_any_source_wait(trace):
     require(trace["world_size"] == 3, "fortran_nonblocking_any_source_wait: world size should be 3")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-    rank2 = trace["sections"][2]
-
     irecv = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_IRECV_TYPE,
         sender=1,
         receiver=0,
@@ -1192,7 +1176,7 @@ def validate_fortran_nonblocking_any_source_wait(trace):
     )
 
     wait = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_WAIT_TYPE,
         sender=0,
         receiver=0,
@@ -1201,7 +1185,7 @@ def validate_fortran_nonblocking_any_source_wait(trace):
     )
 
     send1 = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_SEND_TYPE,
         sender=1,
         receiver=0,
@@ -1210,7 +1194,7 @@ def validate_fortran_nonblocking_any_source_wait(trace):
     )
 
     send2 = require_one(
-        rank2["small"],
+        trace["sections"][2]["small"],
         message_type=MPI_SEND_TYPE,
         sender=2,
         receiver=0,
@@ -1218,21 +1202,15 @@ def validate_fortran_nonblocking_any_source_wait(trace):
         bytes=4,
     )
 
-    require_small_match(send1, irecv, compare_comm=True, compare_tag=True,
-                        context="fortran_nonblocking_any_source_wait matched pair")
-    require_same_value(send1, "comm", send2, "comm", "fortran_nonblocking_any_source_wait send comms")
+    require_ptp_pair(send1, irecv, "fortran_nonblocking_any_source_wait matched pair")
     require_same_value(send1, "tag", send2, "tag", "fortran_nonblocking_any_source_wait send tags")
-    require_same_value(wait, "tag", irecv, "tag", "fortran_nonblocking_any_source_wait wait tag")
-    require_same_value(wait, "comm", irecv, "comm", "fortran_nonblocking_any_source_wait wait comm")
+    require_control_zero_or_from_refs(wait, irecv, "fortran_nonblocking_any_source_wait wait")
 
 def validate_fortran_waitall(trace):
     require(trace["world_size"] == 2, "fortran_waitall: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     sends = require_n(
-        rank0["small"],
+        trace["sections"][0]["small"],
         2,
         message_type=MPI_ISEND_TYPE,
         sender=0,
@@ -1242,7 +1220,7 @@ def validate_fortran_waitall(trace):
     )
 
     w0 = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_WAITALL_TYPE,
         sender=0,
         receiver=0,
@@ -1251,7 +1229,7 @@ def validate_fortran_waitall(trace):
     )
 
     recvs = require_n(
-        rank1["small"],
+        trace["sections"][1]["small"],
         2,
         message_type=MPI_IRECV_TYPE,
         sender=0,
@@ -1261,7 +1239,7 @@ def validate_fortran_waitall(trace):
     )
 
     w1 = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAITALL_TYPE,
         sender=1,
         receiver=1,
@@ -1269,27 +1247,18 @@ def validate_fortran_waitall(trace):
         bytes=0,
     )
 
-    require_all_same(sends, "tag", "fortran_waitall send tags")
-    require_all_same(sends, "comm", "fortran_waitall send comms")
-    require_all_same(recvs, "tag", "fortran_waitall recv tags")
-    require_all_same(recvs, "comm", "fortran_waitall recv comms")
+    require_local_same_comm(sends, "fortran_waitall sends")
+    require_local_same_comm(recvs, "fortran_waitall recvs")
+    require_same_tag_multiset(sends, recvs, "fortran_waitall send/recv tags")
 
-    require_same_value(sends[0], "tag", recvs[0], "tag", "fortran_waitall send/recv tag")
-    require_same_value(sends[0], "comm", recvs[0], "comm", "fortran_waitall send/recv comm")
-
-    require_zero(w0, "tag", "fortran_waitall rank0 waitall tag")
-    require_zero(w0, "comm", "fortran_waitall rank0 waitall comm")
-    require_zero(w1, "tag", "fortran_waitall rank1 waitall tag")
-    require_zero(w1, "comm", "fortran_waitall rank1 waitall comm")
+    require_control_zero_or_from_refs(w0, sends, "fortran_waitall rank0 waitall")
+    require_control_zero_or_from_refs(w1, recvs, "fortran_waitall rank1 waitall")
 
 def validate_fortran_waitany(trace):
     require(trace["world_size"] == 2, "fortran_waitany: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     sends = require_n(
-        rank0["small"],
+        trace["sections"][0]["small"],
         2,
         message_type=MPI_SEND_TYPE,
         sender=0,
@@ -1299,7 +1268,7 @@ def validate_fortran_waitany(trace):
     )
 
     recvs = require_n(
-        rank1["small"],
+        trace["sections"][1]["small"],
         2,
         message_type=MPI_IRECV_TYPE,
         sender=0,
@@ -1309,7 +1278,7 @@ def validate_fortran_waitany(trace):
     )
 
     waitany = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAITANY_TYPE,
         sender=1,
         receiver=1,
@@ -1318,7 +1287,7 @@ def validate_fortran_waitany(trace):
     )
 
     wait = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAIT_TYPE,
         sender=1,
         receiver=1,
@@ -1326,27 +1295,18 @@ def validate_fortran_waitany(trace):
         bytes=0,
     )
 
-    require_all_same(sends, "tag", "fortran_waitany send tags")
-    require_all_same(sends, "comm", "fortran_waitany send comms")
-    require_all_same(recvs, "tag", "fortran_waitany recv tags")
-    require_all_same(recvs, "comm", "fortran_waitany recv comms")
+    require_local_same_comm(sends, "fortran_waitany sends")
+    require_local_same_comm(recvs, "fortran_waitany recvs")
+    require_same_tag_multiset(sends, recvs, "fortran_waitany send/recv tags")
 
-    require_same_value(sends[0], "tag", recvs[0], "tag", "fortran_waitany send/recv tag")
-    require_same_value(sends[0], "comm", recvs[0], "comm", "fortran_waitany send/recv comm")
-
-    require_zero(waitany, "tag", "fortran_waitany control tag")
-    require_zero(waitany, "comm", "fortran_waitany control comm")
-    require_same_value(wait, "tag", recvs[0], "tag", "fortran_waitany trailing wait tag")
-    require_same_value(wait, "comm", recvs[0], "comm", "fortran_waitany trailing wait comm")
+    require_control_zero_or_from_refs(waitany, recvs, "fortran_waitany control")
+    require_control_zero_or_from_refs(wait, recvs, "fortran_waitany trailing wait")
 
 def validate_fortran_testall(trace):
     require(trace["world_size"] == 2, "fortran_testall: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     sends = require_n(
-        rank0["small"],
+        trace["sections"][0]["small"],
         2,
         message_type=MPI_SEND_TYPE,
         sender=0,
@@ -1356,7 +1316,7 @@ def validate_fortran_testall(trace):
     )
 
     recvs = require_n(
-        rank1["small"],
+        trace["sections"][1]["small"],
         2,
         message_type=MPI_IRECV_TYPE,
         sender=0,
@@ -1366,7 +1326,7 @@ def validate_fortran_testall(trace):
     )
 
     testall = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_TESTALL_TYPE,
         sender=1,
         receiver=1,
@@ -1374,25 +1334,17 @@ def validate_fortran_testall(trace):
         bytes=0,
     )
 
-    require_all_same(sends, "tag", "fortran_testall send tags")
-    require_all_same(sends, "comm", "fortran_testall send comms")
-    require_all_same(recvs, "tag", "fortran_testall recv tags")
-    require_all_same(recvs, "comm", "fortran_testall recv comms")
+    require_local_same_comm(sends, "fortran_testall sends")
+    require_local_same_comm(recvs, "fortran_testall recvs")
+    require_same_tag_multiset(sends, recvs, "fortran_testall send/recv tags")
 
-    require_same_value(sends[0], "tag", recvs[0], "tag", "fortran_testall send/recv tag")
-    require_same_value(sends[0], "comm", recvs[0], "comm", "fortran_testall send/recv comm")
-
-    require_zero(testall, "tag", "fortran_testall control tag")
-    require_zero(testall, "comm", "fortran_testall control comm")
+    require_control_zero_or_from_refs(testall, recvs, "fortran_testall control")
 
 def validate_fortran_bsend(trace):
     require(trace["world_size"] == 2, "fortran_bsend: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     bsend = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_BSEND_TYPE,
         sender=0,
         receiver=1,
@@ -1401,7 +1353,7 @@ def validate_fortran_bsend(trace):
     )
 
     recv = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_RECV_TYPE,
         sender=0,
         receiver=1,
@@ -1409,17 +1361,13 @@ def validate_fortran_bsend(trace):
         bytes=4,
     )
 
-    require_small_match(bsend, recv, compare_comm=True, compare_tag=True,
-                        context="fortran_bsend bsend/recv")
+    require_ptp_pair(bsend, recv, "fortran_bsend")
 
 def validate_fortran_ssend(trace):
     require(trace["world_size"] == 2, "fortran_ssend: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     ssend = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_SSEND_TYPE,
         sender=0,
         receiver=1,
@@ -1428,7 +1376,7 @@ def validate_fortran_ssend(trace):
     )
 
     recv = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_RECV_TYPE,
         sender=0,
         receiver=1,
@@ -1436,17 +1384,13 @@ def validate_fortran_ssend(trace):
         bytes=4,
     )
 
-    require_small_match(ssend, recv, compare_comm=True, compare_tag=True,
-                        context="fortran_ssend ssend/recv")
+    require_ptp_pair(ssend, recv, "fortran_ssend")
 
 def validate_fortran_rsend(trace):
     require(trace["world_size"] == 2, "fortran_rsend: world size should be 2")
 
-    rank0 = trace["sections"][0]
-    rank1 = trace["sections"][1]
-
     rsend = require_one(
-        rank0["small"],
+        trace["sections"][0]["small"],
         message_type=MPI_RSEND_TYPE,
         sender=0,
         receiver=1,
@@ -1455,7 +1399,7 @@ def validate_fortran_rsend(trace):
     )
 
     irecv = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_IRECV_TYPE,
         sender=0,
         receiver=1,
@@ -1464,7 +1408,7 @@ def validate_fortran_rsend(trace):
     )
 
     wait = require_one(
-        rank1["small"],
+        trace["sections"][1]["small"],
         message_type=MPI_WAIT_TYPE,
         sender=1,
         receiver=1,
@@ -1472,15 +1416,12 @@ def validate_fortran_rsend(trace):
         bytes=0,
     )
 
-    require_small_match(rsend, irecv, compare_comm=True, compare_tag=True,
-                        context="fortran_rsend rsend/irecv")
-    require_same_value(wait, "tag", irecv, "tag", "fortran_rsend wait tag")
-    require_same_value(wait, "comm", irecv, "comm", "fortran_rsend wait comm")
+    require_ptp_pair(rsend, irecv, "fortran_rsend")
+    require_control_zero_or_from_refs(wait, irecv, "fortran_rsend wait")
 
 def validate_fortran_barrier(trace):
     require(trace["world_size"] == 3, "fortran_barrier: world size should be 3")
 
-    rank0_bar = None
     for r in range(3):
         rec = require_one(
             trace["sections"][r]["small"],
@@ -1491,15 +1432,11 @@ def validate_fortran_barrier(trace):
             bytes=0,
         )
         require_zero(rec, "tag", "fortran_barrier tag")
-        if rank0_bar is None:
-            rank0_bar = rec
-        else:
-            require_same_value(rank0_bar, "comm", rec, "comm", "fortran_barrier communicator")
+        require_comm_int(rec, "comm", "fortran_barrier comm")
 
 def validate_fortran_bcast(trace):
     require(trace["world_size"] == 4, "fortran_bcast: world size should be 4")
 
-    first = None
     for r in range(4):
         rec = require_one(
             trace["sections"][r]["small"],
@@ -1510,15 +1447,11 @@ def validate_fortran_bcast(trace):
             bytes=12,
         )
         require_zero(rec, "tag", "fortran_bcast tag")
-        if first is None:
-            first = rec
-        else:
-            require_same_value(first, "comm", rec, "comm", "fortran_bcast communicator")
+        require_comm_int(rec, "comm", "fortran_bcast comm")
 
 def validate_fortran_reduce(trace):
     require(trace["world_size"] == 4, "fortran_reduce: world size should be 4")
 
-    first = None
     for r in range(4):
         rec = require_one(
             trace["sections"][r]["small"],
@@ -1529,15 +1462,11 @@ def validate_fortran_reduce(trace):
             bytes=20,
         )
         require_zero(rec, "tag", "fortran_reduce tag")
-        if first is None:
-            first = rec
-        else:
-            require_same_value(first, "comm", rec, "comm", "fortran_reduce communicator")
+        require_comm_int(rec, "comm", "fortran_reduce comm")
 
 def validate_fortran_allreduce(trace):
     require(trace["world_size"] == 4, "fortran_allreduce: world size should be 4")
 
-    first = None
     for r in range(4):
         rec = require_one(
             trace["sections"][r]["small"],
@@ -1548,15 +1477,11 @@ def validate_fortran_allreduce(trace):
             bytes=16,
         )
         require_zero(rec, "tag", "fortran_allreduce tag")
-        if first is None:
-            first = rec
-        else:
-            require_same_value(first, "comm", rec, "comm", "fortran_allreduce communicator")
+        require_comm_int(rec, "comm", "fortran_allreduce comm")
 
 def validate_fortran_gather(trace):
     require(trace["world_size"] == 4, "fortran_gather: world size should be 4")
 
-    first = None
     for r in range(4):
         rec = require_one(
             trace["sections"][r]["large"],
@@ -1570,16 +1495,12 @@ def validate_fortran_gather(trace):
             count2=(8 if r == 3 else 0),
             bytes2=(32 if r == 3 else 0),
         )
-        require_large_zero_tags(rec, "fortran_gather tags")
-        if first is None:
-            first = rec
-        else:
-            require_same_value(first, "comm", rec, "comm", "fortran_gather communicator")
+        require_large_zero_tags(rec, "fortran_gather")
+        require_comm_int(rec, "comm", "fortran_gather comm")
 
 def validate_fortran_scatter(trace):
     require(trace["world_size"] == 4, "fortran_scatter: world size should be 4")
 
-    first = None
     for r in range(4):
         rec = require_one(
             trace["sections"][r]["large"],
@@ -1593,16 +1514,12 @@ def validate_fortran_scatter(trace):
             count2=7,
             bytes2=28,
         )
-        require_large_zero_tags(rec, "fortran_scatter tags")
-        if first is None:
-            first = rec
-        else:
-            require_same_value(first, "comm", rec, "comm", "fortran_scatter communicator")
+        require_large_zero_tags(rec, "fortran_scatter")
+        require_comm_int(rec, "comm", "fortran_scatter comm")
 
 def validate_fortran_allgather(trace):
     require(trace["world_size"] == 4, "fortran_allgather: world size should be 4")
 
-    first = None
     for r in range(4):
         rec = require_one(
             trace["sections"][r]["large"],
@@ -1616,11 +1533,8 @@ def validate_fortran_allgather(trace):
             count2=4,
             bytes2=16,
         )
-        require_large_zero_tags(rec, "fortran_allgather tags")
-        if first is None:
-            first = rec
-        else:
-            require_same_value(first, "comm", rec, "comm", "fortran_allgather communicator")
+        require_large_zero_tags(rec, "fortran_allgather")
+        require_comm_int(rec, "comm", "fortran_allgather comm")
 
 def validate_fortran_cancel(trace):
     require(trace["world_size"] == 2, "fortran_cancel: world size should be 2")
@@ -1654,6 +1568,7 @@ def validate_fortran_cancel(trace):
         count=0,
         bytes=0,
     )
+
     b1 = require_one(
         rank1["small"],
         message_type=MPI_BARRIER_TYPE,
@@ -1663,14 +1578,13 @@ def validate_fortran_cancel(trace):
         bytes=0,
     )
 
-    # Wait still exists as a local completion event; tag/comm may derive from the
-    # cancelled request in some implementations.
     require(isinstance(wait["tag"], int), "fortran_cancel wait tag should be int")
     require(isinstance(wait["comm"], int), "fortran_cancel wait comm should be int")
 
     require_zero(b0, "tag", "fortran_cancel barrier rank0 tag")
     require_zero(b1, "tag", "fortran_cancel barrier rank1 tag")
-    require_same_value(b0, "comm", b1, "comm", "fortran_cancel barrier communicator")
+    require_comm_int(b0, "comm", "fortran_cancel barrier rank0 comm")
+    require_comm_int(b1, "comm", "fortran_cancel barrier rank1 comm")
 
 VALIDATORS = {
     "send_recv": validate_send_recv,
