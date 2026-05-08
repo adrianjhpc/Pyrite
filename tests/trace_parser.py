@@ -7,8 +7,8 @@ from pathlib import Path
 
 INT = struct.Struct("=i")
 PROCESS = struct.Struct("=iiii1024s")
-SMALL = struct.Struct("=diiiiii")
-LARGE = struct.Struct("=diiiiiiiiii")
+SMALL = struct.Struct("=diiiiiiii")
+LARGE = struct.Struct("=diiiiiiiiiiii")
 
 DATETIME_LENGTH = 64
 STRING_LENGTH = 1024
@@ -57,7 +57,7 @@ def parse_trace(path):
             nsmall = INT.unpack(_read_exact(f, INT.size))[0]
             small = []
             for _ in range(nsmall):
-                time, rec_id, msg_type, sender, receiver, count, nbytes = SMALL.unpack(
+                time, rec_id, msg_type, comm, tag, sender, receiver, count, nbytes = SMALL.unpack(
                     _read_exact(f, SMALL.size)
                 )
                 small.append(
@@ -65,6 +65,8 @@ def parse_trace(path):
                         "time": time,
                         "id": rec_id,
                         "message_type": msg_type,
+                        "comm" : comm,
+                        "tag" : tag,
                         "sender": sender,
                         "receiver": receiver,
                         "count": count,
@@ -80,28 +82,34 @@ def parse_trace(path):
                     time,
                     rec_id,
                     msg_type,
+                    comm,
                     sender1,
                     receiver1,
                     count1,
                     bytes1,
+                    tag1,
                     sender2,
                     receiver2,
                     count2,
                     bytes2,
+                    tag2,
                 ) = LARGE.unpack(_read_exact(f, LARGE.size))
                 large.append(
                     {
                         "time": time,
                         "id": rec_id,
                         "message_type": msg_type,
+                        "com m": comm,
                         "sender1": sender1,
                         "receiver1": receiver1,
                         "count1": count1,
                         "bytes1": bytes1,
+                        "tag1": tag1,
                         "sender2": sender2,
                         "receiver2": receiver2,
                         "count2": count2,
                         "bytes2": bytes2,
+                        "tag2": tag2,
                     }
                 )
 

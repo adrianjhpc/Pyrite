@@ -101,29 +101,6 @@ extern "C" {
   } telemetry_event_t;
 
   
-  /* -------------------------------------------------------------------------- */
-  /* Pending nonblocking request tracking                                       */
-  /* -------------------------------------------------------------------------- */
-  
-  typedef struct pending_request {
-    MPI_Request handle;
-    int message_type;
-    int sender_world;
-    int receiver_world;
-    int count;
-    MPI_Datatype datatype;
-    int tag;
-    int is_recv;
-    int source_rank_param;
-    int peer_is_remote_group;
-    MPI_Group group;
-    int have_group;
-    int comm_id; 
-    struct pending_request *next;
-  } pending_request_t;
-  
-  static pending_request_t *pending_requests = NULL;
-  
   
   /* Backend Interface Definition */
   typedef struct {

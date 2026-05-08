@@ -41,6 +41,26 @@ void register_tracking_backend(tracking_backend_t *backend) {
   current_backend = backend;
 }
 
+typedef struct pending_request {
+    MPI_Request handle;
+    int message_type;
+    int sender_world;
+    int receiver_world;
+    int count;
+    MPI_Datatype datatype;
+    int tag;
+    int is_recv;
+    int source_rank_param;
+    int peer_is_remote_group;
+    MPI_Group group;
+    int have_group;
+    MPI_Fint comm_id;
+    struct pending_request *next;
+} pending_request_t;
+
+static pending_request_t *pending_requests = NULL;
+
+
 /* -------------------------------------------------------------------------- */
 /* Internal helpers                                                           */
 /* -------------------------------------------------------------------------- */
@@ -182,6 +202,68 @@ static int sample_local_time_anchor(double *mpi_zero_out, int64_t *unix_zero_ns_
   return 0;
 }
 
+typedef struct {
+    int valid;
+    MPI_Fint comm_id;
+    int tag;
+} request_meta_t;
+
+typedef struct {
+    int have_any;
+    int ambiguous;
+    MPI_Fint comm_id;
+    int tag;
+} control_meta_t;
+
+static request_meta_t request_meta_from_req(const pending_request_t *req) {
+    request_meta_t meta;
+    meta.valid = 0;
+    meta.comm_id = 0;
+    meta.tag = 0;
+
+    if (req != NULL) {
+        meta.valid = 1;
+        meta.comm_id = req->comm_id;
+        meta.tag = req->tag;
+    }
+
+    return meta;
+}
+
+static void control_meta_init(control_meta_t *meta) {
+    if (meta == NULL) return;
+    meta->have_any = 0;
+    meta->ambiguous = 0;
+    meta->comm_id = 0;
+    meta->tag = 0;
+}
+
+static void control_meta_note(control_meta_t *meta, const pending_request_t *req) {
+    if (meta == NULL || req == NULL) return;
+
+    if (!meta->have_any) {
+        meta->have_any = 1;
+        meta->comm_id = req->comm_id;
+        meta->tag = req->tag;
+        return;
+    }
+
+    if (meta->comm_id != req->comm_id || meta->tag != req->tag) {
+        meta->ambiguous = 1;
+    }
+}
+
+static MPI_Fint control_meta_comm(const control_meta_t *meta) {
+    if (meta == NULL || !meta->have_any || meta->ambiguous) return 0;
+    return meta->comm_id;
+}
+
+static int control_meta_tag(const control_meta_t *meta) {
+    if (meta == NULL || !meta->have_any || meta->ambiguous) return 0;
+    return meta->tag;
+}
+
+
 /* -------------------------------------------------------------------------- */
 /* Event Recording Routers                                                    */
 /* -------------------------------------------------------------------------- */
@@ -227,6 +309,25 @@ static void record_large_event(double ts, int message_type, int comm, int sender
   current_backend->record_event(&ev);
 }
 
+static void record_control_event(double ts, int message_type, MPI_Fint comm_id, int tag,
+                                 int rank, int completed_count) {
+    if (!tracking_initialized || !current_backend || !current_backend->record_event) return;
+
+    telemetry_event_t ev = {0};
+    ev.time = ts;
+    ev.id = current_id++;
+    ev.message_type = message_type;
+    ev.is_large = 0;
+    ev.comm = (int)comm_id;
+    ev.tag = tag;
+    ev.sender = rank;
+    ev.receiver = rank;
+    ev.count = completed_count;
+    ev.bytes = 0;
+
+    current_backend->record_event(&ev);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Pending Request Logic                                                      */
 /* -------------------------------------------------------------------------- */
@@ -259,7 +360,10 @@ static pending_request_t *detach_pending_request(MPI_Request handle) {
 static void register_pending_request(MPI_Request handle, int message_type, int sender_world, int receiver_world,
                                      int count, MPI_Datatype datatype, int tag, int is_recv, int source_rank_param,
                                      int peer_is_remote_group, MPI_Comm comm) {
+    
     pending_request_t *req;
+    int is_inter = 0;
+
     if (handle == MPI_REQUEST_NULL) return;
 
     req = (pending_request_t *)calloc(1, sizeof(pending_request_t));
@@ -275,20 +379,27 @@ static void register_pending_request(MPI_Request handle, int message_type, int s
     req->is_recv = is_recv;
     req->source_rank_param = source_rank_param;
     req->peer_is_remote_group = peer_is_remote_group;
-    
     req->group = MPI_GROUP_NULL;
     req->have_group = 0;
     req->comm_id = MPI_Comm_c2f(comm);
     req->next = pending_requests;
 
-    // Safely cache the local group instead of calling the collective Comm_dup
     if (is_recv && comm != MPI_COMM_WORLD && comm != MPI_COMM_NULL) {
-        if (PMPI_Comm_group(comm, &req->group) == MPI_SUCCESS) {
-            req->have_group = 1;
+        if (PMPI_Comm_test_inter(comm, &is_inter) == MPI_SUCCESS &&
+            is_inter && peer_is_remote_group) {
+            if (PMPI_Comm_remote_group(comm, &req->group) == MPI_SUCCESS) {
+                req->have_group = 1;
+            }
+        } else {
+            if (PMPI_Comm_group(comm, &req->group) == MPI_SUCCESS) {
+                req->have_group = 1;
+            }
         }
     }
+
     pending_requests = req;
 }
+
 
 static int actual_count_from_status(MPI_Status *status, MPI_Datatype datatype, int fallback_count) {
   int actual_count = fallback_count;
@@ -815,341 +926,420 @@ int MPI_Sendrecv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, int 
   return rc;
 }
 
+
 int MPI_Wait(MPI_Request *request, MPI_Status *status) {
-  int rc;
-  int completed = 0;
-  MPI_Request req_before = MPI_REQUEST_NULL;
-  pending_request_t *tracked = NULL;
-  double ts = trace_timestamp();
-  MPI_Status local_status;
-  MPI_Status *call_status = status;
+    int rc;
+    int completed = 0;
+    MPI_Request req_before = MPI_REQUEST_NULL;
+    pending_request_t *tracked = NULL;
+    request_meta_t meta = {0, 0, 0};
+    double t_start = trace_timestamp();
+    double t_end;
+    MPI_Status local_status;
+    MPI_Status *call_status = status;
 
-  if (request != NULL) req_before = *request;
+    if (request != NULL) req_before = *request;
 
-  tracked = find_pending_request(req_before);
-  if (tracked != NULL && c_status_is_ignore(call_status)) call_status = &local_status;
-  else if (call_status == NULL) call_status = MPI_STATUS_IGNORE;
-
-  rc = PMPI_Wait(request, call_status);
-
-  if (rc == MPI_SUCCESS) {
-    if (tracked != NULL) {
-      tracked = detach_pending_request(req_before);
-      complete_pending_request(tracked, call_status, !c_status_is_ignore(call_status), ts);
-      completed = 1;
+    tracked = find_pending_request(req_before);
+    if (tracked != NULL && c_status_is_ignore(call_status)) {
+        call_status = &local_status;
+    } else if (call_status == NULL) {
+        call_status = MPI_STATUS_IGNORE;
     }
-    record_small_event(ts, MPI_WAIT_TYPE, MPI_Comm_c2f(tracked->comm_id), tracked->tag, tracking_my_rank, tracking_my_rank, completed, MPI_DATATYPE_NULL);
-  }
-  return rc;
+
+    rc = PMPI_Wait(request, call_status);
+    t_end = trace_timestamp();
+
+    if (rc == MPI_SUCCESS) {
+        if (tracked != NULL) {
+            pending_request_t *detached = detach_pending_request(req_before);
+            if (detached != NULL) {
+                meta = request_meta_from_req(detached);
+                complete_pending_request(detached, call_status, !c_status_is_ignore(call_status), t_end);
+                completed = 1;
+            }
+        }
+
+        record_control_event(t_start, MPI_WAIT_TYPE, meta.valid ? meta.comm_id : 0, meta.valid ? meta.tag : 0, tracking_my_rank, completed);
+    }
+
+    return rc;
 }
 
 int MPI_Waitall(int count, MPI_Request array_of_requests[], MPI_Status array_of_statuses[]) {
-  int rc;
-  int i;
-  int completed = 0;
-  MPI_Request *pre_handles = NULL;
-  MPI_Status *temp_statuses = NULL;
-  MPI_Status *call_statuses = array_of_statuses;
-  double t_start = trace_timestamp();
+    int rc;
+    int i;
+    int completed = 0;
+    MPI_Request *pre_handles = NULL;
+    MPI_Status *temp_statuses = NULL;
+    MPI_Status *call_statuses = array_of_statuses;
+    control_meta_t meta;
+    double t_start = trace_timestamp();
+    double t_end;
 
-  if (count > 0) {
-    pre_handles = (MPI_Request *)malloc((size_t)count * sizeof(MPI_Request));
-    if (pre_handles != NULL) {
-      for (i = 0; i < count; i++) pre_handles[i] = array_of_requests[i];
+    control_meta_init(&meta);
+
+    if (count > 0) {
+        pre_handles = (MPI_Request *)malloc((size_t)count * sizeof(MPI_Request));
+        if (pre_handles != NULL) {
+            for (i = 0; i < count; i++) pre_handles[i] = array_of_requests[i];
+        }
     }
-  }
 
-  if (count > 0 && c_statuses_are_ignore(array_of_statuses)) {
-    temp_statuses = (MPI_Status *)malloc((size_t)count * sizeof(MPI_Status));
-    if (temp_statuses != NULL) call_statuses = temp_statuses;
-  }
-
-  rc = PMPI_Waitall(count, array_of_requests, call_statuses);
-
-  double t_end = trace_timestamp();
-  int duration_us = (int)((t_end - t_start) * 1000000.0);
-
-  if (rc == MPI_SUCCESS) {
-    for (i = 0; i < count; i++) {
-      pending_request_t *tracked = detach_pending_request(pre_handles[i]);
-      if (tracked != NULL) {
-	MPI_Status *st = NULL;
-	if (!c_statuses_are_ignore(call_statuses)) st = &call_statuses[i];
-	complete_pending_request(tracked, st, (st != NULL), t_end);
-	completed++;
-      }
+    if (count > 0 && c_statuses_are_ignore(array_of_statuses)) {
+        temp_statuses = (MPI_Status *)malloc((size_t)count * sizeof(MPI_Status));
+        if (temp_statuses != NULL) call_statuses = temp_statuses;
     }
-    record_small_event(t_start, MPI_WAITALL_TYPE, 0, 0, tracking_my_rank, tracking_my_rank, completed, duration_us);
-  }
 
-  free(pre_handles);
-  free(temp_statuses);
-  return rc;
+    if (count > 0 && pre_handles == NULL) {
+        rc = PMPI_Waitall(count, array_of_requests, call_statuses);
+        free(temp_statuses);
+        return rc;
+    }
+
+    rc = PMPI_Waitall(count, array_of_requests, call_statuses);
+    t_end = trace_timestamp();
+
+    if (rc == MPI_SUCCESS) {
+        for (i = 0; i < count; i++) {
+            pending_request_t *tracked = detach_pending_request(pre_handles[i]);
+            if (tracked != NULL) {
+                MPI_Status *st = NULL;
+                if (!c_statuses_are_ignore(call_statuses)) st = &call_statuses[i];
+                control_meta_note(&meta, tracked);
+                complete_pending_request(tracked, st, (st != NULL), t_end);
+                completed++;
+            }
+        }
+
+        record_control_event(t_start, MPI_WAITALL_TYPE, control_meta_comm(&meta), control_meta_tag(&meta), tracking_my_rank, completed);
+    }
+
+    free(pre_handles);
+    free(temp_statuses);
+    return rc;
 }
 
 int MPI_Waitany(int count, MPI_Request array_of_requests[], int *index, MPI_Status *status) {
-  int rc;
-  int completed = 0;
-  int i;
-  MPI_Request *pre_handles = NULL;
-  MPI_Status local_status;
-  MPI_Status *call_status = status;
-  double t_start = trace_timestamp();
+    int rc;
+    int completed = 0;
+    int i;
+    MPI_Request *pre_handles = NULL;
+    MPI_Status local_status;
+    MPI_Status *call_status = status;
+    request_meta_t meta = {0, 0, 0};
+    double t_start = trace_timestamp();
+    double t_end;
 
-  if (count > 0) {
-    pre_handles = (MPI_Request *)malloc((size_t)count * sizeof(MPI_Request));
-    if (pre_handles != NULL) {
-      for (i = 0; i < count; i++) pre_handles[i] = array_of_requests[i];
+    if (count > 0) {
+        pre_handles = (MPI_Request *)malloc((size_t)count * sizeof(MPI_Request));
+        if (pre_handles != NULL) {
+            for (i = 0; i < count; i++) pre_handles[i] = array_of_requests[i];
+        }
     }
-  }
 
-  if (c_status_is_ignore(call_status)) call_status = &local_status;
-
-  rc = PMPI_Waitany(count, array_of_requests, index, call_status);
-
-  double t_end = trace_timestamp();
-  int duration_us = (int)((t_end - t_start) * 1000000.0);
-
-  if (rc == MPI_SUCCESS) {
-    if (index != NULL && *index != MPI_UNDEFINED && pre_handles != NULL) {
-      pending_request_t *tracked = detach_pending_request(pre_handles[*index]);
-      if (tracked != NULL) {
-	complete_pending_request(tracked, call_status, 1, t_start);
-	completed = 1;
-      }
+    if (count > 0 && pre_handles == NULL) {
+        if (c_status_is_ignore(call_status)) call_status = &local_status;
+        rc = PMPI_Waitany(count, array_of_requests, index, call_status);
+        return rc;
     }
-    record_small_event(t_start, MPI_WAITANY_TYPE, 0, 0, tracking_my_rank, tracking_my_rank, completed, duration_us);
-  }
 
-  free(pre_handles);
-  return rc;
+    if (c_status_is_ignore(call_status)) call_status = &local_status;
+
+    rc = PMPI_Waitany(count, array_of_requests, index, call_status);
+    t_end = trace_timestamp();
+
+    if (rc == MPI_SUCCESS) {
+        if (index != NULL && *index != MPI_UNDEFINED && pre_handles != NULL) {
+            pending_request_t *tracked = detach_pending_request(pre_handles[*index]);
+            if (tracked != NULL) {
+                meta = request_meta_from_req(tracked);
+                complete_pending_request(tracked, call_status, 1, t_end);
+                completed = 1;
+            }
+        }
+
+        record_control_event(t_start, MPI_WAITANY_TYPE, meta.valid ? meta.comm_id : 0, meta.valid ? meta.tag : 0, tracking_my_rank, completed);
+    }
+
+    free(pre_handles);
+    return rc;
 }
 
-int MPI_Waitsome(int incount, MPI_Request array_of_requests[], int *outcount, int array_of_indices[], MPI_Status array_of_statuses[]) {
-  int rc;
-  int i;
-  int completed = 0;
-  MPI_Request *pre_handles = NULL;
-  MPI_Status *temp_statuses = NULL;
-  MPI_Status *call_statuses = array_of_statuses;
-  double t_start = trace_timestamp();
+int MPI_Waitsome(int incount, MPI_Request array_of_requests[], int *outcount,
+                 int array_of_indices[], MPI_Status array_of_statuses[]) {
+    int rc;
+    int i;
+    int completed = 0;
+    MPI_Request *pre_handles = NULL;
+    MPI_Status *temp_statuses = NULL;
+    MPI_Status *call_statuses = array_of_statuses;
+    control_meta_t meta;
+    double t_start = trace_timestamp();
+    double t_end;
 
-  if (incount > 0) {
-    pre_handles = (MPI_Request *)malloc((size_t)incount * sizeof(MPI_Request));
-    if (pre_handles != NULL) {
-      for (i = 0; i < incount; i++) pre_handles[i] = array_of_requests[i];
+    control_meta_init(&meta);
+
+    if (incount > 0) {
+        pre_handles = (MPI_Request *)malloc((size_t)incount * sizeof(MPI_Request));
+        if (pre_handles != NULL) {
+            for (i = 0; i < incount; i++) pre_handles[i] = array_of_requests[i];
+        }
     }
-  }
 
-  if (incount > 0 && c_statuses_are_ignore(array_of_statuses)) {
-    temp_statuses = (MPI_Status *)malloc((size_t)incount * sizeof(MPI_Status));
-    if (temp_statuses != NULL) call_statuses = temp_statuses;
-  }
-
-  rc = PMPI_Waitsome(incount, array_of_requests, outcount, array_of_indices, call_statuses);
-
-  double t_end = trace_timestamp();
-  int duration_us = (int)((t_end - t_start) * 1000000.0);
-
-  if (rc == MPI_SUCCESS && outcount != NULL && *outcount != MPI_UNDEFINED) {
-    for (i = 0; i < *outcount; i++) {
-      int idx = array_of_indices[i];
-      pending_request_t *tracked = detach_pending_request(pre_handles[idx]);
-      if (tracked != NULL) {
-	MPI_Status *st = NULL;
-	if (!c_statuses_are_ignore(call_statuses)) st = &call_statuses[i];
-	complete_pending_request(tracked, st, (st != NULL), t_start);
-	completed++;
-      }
+    if (incount > 0 && c_statuses_are_ignore(array_of_statuses)) {
+        temp_statuses = (MPI_Status *)malloc((size_t)incount * sizeof(MPI_Status));
+        if (temp_statuses != NULL) call_statuses = temp_statuses;
     }
-    record_small_event(t_start, MPI_WAITSOME_TYPE, 0, 0, tracking_my_rank, tracking_my_rank, completed, duration_us);
-  }
 
-  free(pre_handles);
-  free(temp_statuses);
-  return rc;
+    if (incount > 0 && pre_handles == NULL) {
+        rc = PMPI_Waitsome(incount, array_of_requests, outcount, array_of_indices, call_statuses);
+        free(temp_statuses);
+        return rc;
+    }
+
+    rc = PMPI_Waitsome(incount, array_of_requests, outcount, array_of_indices, call_statuses);
+    t_end = trace_timestamp();
+
+    if (rc == MPI_SUCCESS && outcount != NULL && *outcount != MPI_UNDEFINED) {
+        for (i = 0; i < *outcount; i++) {
+            int idx = array_of_indices[i];
+            pending_request_t *tracked = detach_pending_request(pre_handles[idx]);
+            if (tracked != NULL) {
+                MPI_Status *st = NULL;
+                if (!c_statuses_are_ignore(call_statuses)) st = &call_statuses[i];
+                control_meta_note(&meta, tracked);
+                complete_pending_request(tracked, st, (st != NULL), t_end);
+                completed++;
+            }
+        }
+
+        record_control_event(t_start, MPI_WAITSOME_TYPE, control_meta_comm(&meta), control_meta_tag(&meta), tracking_my_rank, completed);
+    }
+
+    free(pre_handles);
+    free(temp_statuses);
+    return rc;
 }
 
 int MPI_Test(MPI_Request *request, int *flag, MPI_Status *status) {
-  int rc;
-  int completed = 0;
-  MPI_Request req_before = MPI_REQUEST_NULL;
-  pending_request_t *tracked = NULL;
-  double t_start = trace_timestamp();
-  MPI_Status local_status;
-  MPI_Status *call_status = status;
+    int rc;
+    int completed = 0;
+    MPI_Request req_before = MPI_REQUEST_NULL;
+    pending_request_t *tracked = NULL;
+    request_meta_t meta = {0, 0, 0};
+    double t_start = trace_timestamp();
+    double t_end;
+    MPI_Status local_status;
+    MPI_Status *call_status = status;
 
-  if (request != NULL) req_before = *request;
+    if (request != NULL) req_before = *request;
 
-  tracked = find_pending_request(req_before);
-  if (tracked != NULL && c_status_is_ignore(call_status)) call_status = &local_status;
-  else if (call_status == NULL) call_status = MPI_STATUS_IGNORE;
-
-  rc = PMPI_Test(request, flag, call_status);
-
-  double t_end = trace_timestamp();
-  int duration_us = (int)((t_end - t_start) * 1000000.0);
-
-  if (rc == MPI_SUCCESS && flag != NULL && *flag) {
-    if (tracked != NULL) {
-      tracked = detach_pending_request(req_before);
-      complete_pending_request(tracked, call_status, !c_status_is_ignore(call_status), t_start);
-      completed = 1;
+    tracked = find_pending_request(req_before);
+    if (tracked != NULL && c_status_is_ignore(call_status)) {
+        call_status = &local_status;
+    } else if (call_status == NULL) {
+        call_status = MPI_STATUS_IGNORE;
     }
-    record_small_event(t_start, MPI_TEST_TYPE, MPI_Comm_c2f(tracked->comm_id), tracked->tag, tracking_my_rank, tracking_my_rank, completed, duration_us);
-  }
-  return rc;
+
+    rc = PMPI_Test(request, flag, call_status);
+    t_end = trace_timestamp();
+
+    if (rc == MPI_SUCCESS && flag != NULL && *flag) {
+        if (tracked != NULL) {
+            pending_request_t *detached = detach_pending_request(req_before);
+            if (detached != NULL) {
+                meta = request_meta_from_req(detached);
+                complete_pending_request(detached, call_status, !c_status_is_ignore(call_status), t_end);
+                completed = 1;
+            }
+        }
+
+        record_control_event(t_start, MPI_TEST_TYPE, meta.valid ? meta.comm_id : 0, meta.valid ? meta.tag : 0, tracking_my_rank, completed);
+    }
+
+    return rc;
 }
 
 int MPI_Testall(int count, MPI_Request array_of_requests[], int *flag, MPI_Status array_of_statuses[]) {
-  int rc;
-  int i;
-  int completed = 0;
-  MPI_Request *pre_handles = NULL;
-  MPI_Status *temp_statuses = NULL;
-  MPI_Status *call_statuses = array_of_statuses;
-  double t_start = trace_timestamp();
+    int rc;
+    int i;
+    int completed = 0;
+    MPI_Request *pre_handles = NULL;
+    MPI_Status *temp_statuses = NULL;
+    MPI_Status *call_statuses = array_of_statuses;
+    control_meta_t meta;
+    double t_start = trace_timestamp();
+    double t_end;
 
-  if (count > 0) {
-    pre_handles = (MPI_Request *)malloc((size_t)count * sizeof(MPI_Request));
-    if (pre_handles != NULL) {
-      for (i = 0; i < count; i++) pre_handles[i] = array_of_requests[i];
+    control_meta_init(&meta);
+
+    if (count > 0) {
+        pre_handles = (MPI_Request *)malloc((size_t)count * sizeof(MPI_Request));
+        if (pre_handles != NULL) {
+            for (i = 0; i < count; i++) pre_handles[i] = array_of_requests[i];
+        }
     }
-  }
 
-  if (count > 0 && c_statuses_are_ignore(array_of_statuses)) {
-    temp_statuses = (MPI_Status *)malloc((size_t)count * sizeof(MPI_Status));
-    if (temp_statuses != NULL) call_statuses = temp_statuses;
-  }
-
-  rc = PMPI_Testall(count, array_of_requests, flag, call_statuses);
-
-  double t_end = trace_timestamp();
-  int duration_us = (int)((t_end - t_start) * 1000000.0);
-
-  if (rc == MPI_SUCCESS && flag != NULL && *flag) {
-    for (i = 0; i < count; i++) {
-      pending_request_t *tracked = detach_pending_request(pre_handles[i]);
-      if (tracked != NULL) {
-	MPI_Status *st = NULL;
-	if (!c_statuses_are_ignore(call_statuses)) st = &call_statuses[i];
-	complete_pending_request(tracked, st, (st != NULL), t_start);
-	completed++;
-      }
+    if (count > 0 && c_statuses_are_ignore(array_of_statuses)) {
+        temp_statuses = (MPI_Status *)malloc((size_t)count * sizeof(MPI_Status));
+        if (temp_statuses != NULL) call_statuses = temp_statuses;
     }
-    record_small_event(t_start, MPI_TESTALL_TYPE, 0, 0, tracking_my_rank, tracking_my_rank, completed, duration_us);
-  }
 
-  free(pre_handles);
-  free(temp_statuses);
-  return rc;
+    if (count > 0 && pre_handles == NULL) {
+        rc = PMPI_Testall(count, array_of_requests, flag, call_statuses);
+        free(temp_statuses);
+        return rc;
+    }
+
+    rc = PMPI_Testall(count, array_of_requests, flag, call_statuses);
+    t_end = trace_timestamp();
+
+    if (rc == MPI_SUCCESS && flag != NULL && *flag) {
+        for (i = 0; i < count; i++) {
+            pending_request_t *tracked = detach_pending_request(pre_handles[i]);
+            if (tracked != NULL) {
+                MPI_Status *st = NULL;
+                if (!c_statuses_are_ignore(call_statuses)) st = &call_statuses[i];
+                control_meta_note(&meta, tracked);
+                complete_pending_request(tracked, st, (st != NULL), t_end);
+                completed++;
+            }
+        }
+
+        record_control_event(t_start, MPI_TESTALL_TYPE, control_meta_comm(&meta), control_meta_tag(&meta), tracking_my_rank, completed);
+    }
+
+    free(pre_handles);
+    free(temp_statuses);
+    return rc;
 }
 
 int MPI_Testany(int count, MPI_Request array_of_requests[], int *index, int *flag, MPI_Status *status) {
-  int rc;
-  int completed = 0;
-  int i;
-  MPI_Request *pre_handles = NULL;
-  MPI_Status local_status;
-  MPI_Status *call_status = status;
-  double t_start = trace_timestamp();
+    int rc;
+    int completed = 0;
+    int i;
+    MPI_Request *pre_handles = NULL;
+    MPI_Status local_status;
+    MPI_Status *call_status = status;
+    request_meta_t meta = {0, 0, 0};
+    double t_start = trace_timestamp();
+    double t_end;
 
-  if (count > 0) {
-    pre_handles = (MPI_Request *)malloc((size_t)count * sizeof(MPI_Request));
-    if (pre_handles != NULL) {
-      for (i = 0; i < count; i++) pre_handles[i] = array_of_requests[i];
+    if (count > 0) {
+        pre_handles = (MPI_Request *)malloc((size_t)count * sizeof(MPI_Request));
+        if (pre_handles != NULL) {
+            for (i = 0; i < count; i++) pre_handles[i] = array_of_requests[i];
+        }
     }
-  }
 
-  if (c_status_is_ignore(call_status)) call_status = &local_status;
-
-  rc = PMPI_Testany(count, array_of_requests, index, flag, call_status);
-
-  double t_end = trace_timestamp();
-  int duration_us = (int)((t_end - t_start) * 1000000.0);
-
-  if (rc == MPI_SUCCESS && flag != NULL && *flag) {
-    if (index != NULL && *index != MPI_UNDEFINED && pre_handles != NULL) {
-      pending_request_t *tracked = detach_pending_request(pre_handles[*index]);
-      if (tracked != NULL) {
-	complete_pending_request(tracked, call_status, 1, t_start);
-	completed = 1;
-      }
+    if (count > 0 && pre_handles == NULL) {
+        if (c_status_is_ignore(call_status)) call_status = &local_status;
+        rc = PMPI_Testany(count, array_of_requests, index, flag, call_status);
+        return rc;
     }
-    record_small_event(t_start, MPI_TESTANY_TYPE, 0, 0, tracking_my_rank, tracking_my_rank, completed, duration_us);
-  }
 
-  free(pre_handles);
-  return rc;
+    if (c_status_is_ignore(call_status)) call_status = &local_status;
+
+    rc = PMPI_Testany(count, array_of_requests, index, flag, call_status);
+    t_end = trace_timestamp();
+
+    if (rc == MPI_SUCCESS && flag != NULL && *flag) {
+        if (index != NULL && *index != MPI_UNDEFINED && pre_handles != NULL) {
+            pending_request_t *tracked = detach_pending_request(pre_handles[*index]);
+            if (tracked != NULL) {
+                meta = request_meta_from_req(tracked);
+                complete_pending_request(tracked, call_status, 1, t_end);
+                completed = 1;
+            }
+        }
+
+        record_control_event(t_start, MPI_TESTANY_TYPE, meta.valid ? meta.comm_id : 0, meta.valid ? meta.tag : 0, tracking_my_rank, completed);
+    }
+
+    free(pre_handles);
+    return rc;
 }
 
 int MPI_Testsome(int incount, MPI_Request array_of_requests[], int *outcount, int array_of_indices[], MPI_Status array_of_statuses[]) {
-  int rc;
-  int i;
-  int completed = 0;
-  MPI_Request *pre_handles = NULL;
-  MPI_Status *temp_statuses = NULL;
-  MPI_Status *call_statuses = array_of_statuses;
-  double t_start = trace_timestamp();
+    int rc;
+    int i;
+    int completed = 0;
+    MPI_Request *pre_handles = NULL;
+    MPI_Status *temp_statuses = NULL;
+    MPI_Status *call_statuses = array_of_statuses;
+    control_meta_t meta;
+    double t_start = trace_timestamp();
+    double t_end;
 
-  if (incount > 0) {
-    pre_handles = (MPI_Request *)malloc((size_t)incount * sizeof(MPI_Request));
-    if (pre_handles != NULL) {
-      for (i = 0; i < incount; i++) pre_handles[i] = array_of_requests[i];
+    control_meta_init(&meta);
+
+    if (incount > 0) {
+        pre_handles = (MPI_Request *)malloc((size_t)incount * sizeof(MPI_Request));
+        if (pre_handles != NULL) {
+            for (i = 0; i < incount; i++) pre_handles[i] = array_of_requests[i];
+        }
     }
-  }
 
-  if (incount > 0 && c_statuses_are_ignore(array_of_statuses)) {
-    temp_statuses = (MPI_Status *)malloc((size_t)incount * sizeof(MPI_Status));
-    if (temp_statuses != NULL) call_statuses = temp_statuses;
-  }
-
-  rc = PMPI_Testsome(incount, array_of_requests, outcount, array_of_indices, call_statuses);
-
-  double t_end = trace_timestamp();
-  int duration_us = (int)((t_end - t_start) * 1000000.0);
-
-  if (rc == MPI_SUCCESS && outcount != NULL && *outcount != MPI_UNDEFINED && *outcount > 0) {
-    for (i = 0; i < *outcount; i++) {
-      int idx = array_of_indices[i];
-      pending_request_t *tracked = detach_pending_request(pre_handles[idx]);
-      if (tracked != NULL) {
-	MPI_Status *st = NULL;
-	if (!c_statuses_are_ignore(call_statuses)) st = &call_statuses[i];
-	complete_pending_request(tracked, st, (st != NULL), t_start);
-	completed++;
-      }
+    if (incount > 0 && c_statuses_are_ignore(array_of_statuses)) {
+        temp_statuses = (MPI_Status *)malloc((size_t)incount * sizeof(MPI_Status));
+        if (temp_statuses != NULL) call_statuses = temp_statuses;
     }
-    record_small_event(t_start, MPI_TESTSOME_TYPE, 0, 0, tracking_my_rank, tracking_my_rank, completed, duration_us);
-  }
 
-  free(pre_handles);
-  free(temp_statuses);
-  return rc;
+    if (incount > 0 && pre_handles == NULL) {
+        rc = PMPI_Testsome(incount, array_of_requests, outcount, array_of_indices, call_statuses);
+        free(temp_statuses);
+        return rc;
+    }
+
+    rc = PMPI_Testsome(incount, array_of_requests, outcount, array_of_indices, call_statuses);
+    t_end = trace_timestamp();
+
+    if (rc == MPI_SUCCESS && outcount != NULL && *outcount != MPI_UNDEFINED && *outcount > 0) {
+        for (i = 0; i < *outcount; i++) {
+            int idx = array_of_indices[i];
+            pending_request_t *tracked = detach_pending_request(pre_handles[idx]);
+            if (tracked != NULL) {
+                MPI_Status *st = NULL;
+                if (!c_statuses_are_ignore(call_statuses)) st = &call_statuses[i];
+                control_meta_note(&meta, tracked);
+                complete_pending_request(tracked, st, (st != NULL), t_end);
+                completed++;
+            }
+        }
+
+        record_control_event(t_end, MPI_TESTSOME_TYPE, control_meta_comm(&meta), control_meta_tag(&meta), tracking_my_rank, completed);
+    }
+
+    free(pre_handles);
+    free(temp_statuses);
+    return rc;
 }
+
 
 int MPI_Cancel(MPI_Request *request) {
   return PMPI_Cancel(request);
 }
 
 int MPI_Barrier(MPI_Comm comm) {
-  int rc;
-  int local_world = tracking_my_rank;
-  double t_start = trace_timestamp();
+    int rc;
+    int local_world = tracking_my_rank;
+    double t_start = trace_timestamp();
+    double t_end;
 
-  rc = PMPI_Barrier(comm);
+    rc = PMPI_Barrier(comm);
+    t_end = trace_timestamp();
 
-  double t_end = trace_timestamp();
-  int duration_us = (int)((t_end - t_start) * 1000000.0);
-
-  if (rc == MPI_SUCCESS) {
-    if (comm != MPI_COMM_WORLD && comm != MPI_COMM_NULL) {
-      current_world_rank_in_comm(comm, &local_world);
+    if (rc == MPI_SUCCESS) {
+        if (comm != MPI_COMM_WORLD && comm != MPI_COMM_NULL) {
+            current_world_rank_in_comm(comm, &local_world);
+        }
+        record_control_event(t_start, MPI_BARRIER_TYPE, MPI_Comm_c2f(comm), 0, local_world, 0);
     }
-    record_small_event(t_start, MPI_BARRIER_TYPE, MPI_Comm_c2f(comm), 0, local_world, local_world, 0, duration_us);
-  }
-  return rc;
+
+    return rc;
 }
+
 
 int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm) {
   int rc;
