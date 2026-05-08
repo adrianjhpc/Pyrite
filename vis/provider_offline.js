@@ -21,7 +21,7 @@ const OfflineProvider = {
         document.getElementById("timeSlider")?.addEventListener("change", (e) => { this.pausePlayback(); this.seekToTime(parseFloat(e.target.value)); });
         document.getElementById("speedSlider")?.addEventListener("input", (e) => { document.getElementById("speedLabel").textContent = Math.pow(10, parseFloat(e.target.value)).toFixed(3) + "x"; });
         
-        VisualizerCore.init("visCanvas");
+        VisualiserCore.init("visCanvas");
     },
 
     decompressBlob: async function(blob) {
@@ -51,7 +51,7 @@ const OfflineProvider = {
 
     initDashboard: function() {
         this.pausePlayback();
-        VisualizerCore.clearTopology();
+        VisualiserCore.clearTopology();
 
         const chunks = this.parsedData.chunks;
         this.minTime = (chunks && chunks.length > 0) ? chunks[0].t_start : 0;
@@ -63,8 +63,8 @@ const OfflineProvider = {
         if (document.getElementById("btn-play")) document.getElementById("btn-play").disabled = false;
 
         // Hand the blueprint off to the core
-        VisualizerCore.buildTopology(this.parsedData.hardware_blueprint, this.parsedData.topology, this.parsedData.metadata || this.parsedData.info);
-        VisualizerCore.initSpectrograms(this.parsedData.statistics);
+        VisualiserCore.buildTopology(this.parsedData.hardware_blueprint, this.parsedData.topology, this.parsedData.metadata || this.parsedData.info);
+        VisualiserCore.initSpectrograms(this.parsedData.statistics);
 
         this.seekToTime(this.minTime).catch(err => { console.error(err); this.pausePlayback(); });
     },
@@ -119,8 +119,8 @@ const OfflineProvider = {
         await this.ensureChunkLoadedForTime(this.currentTime);
         const activeEvents = this.getActiveEventsForWindow();
         
-        VisualizerCore.renderFrame(activeEvents);
-        VisualizerCore.updateDynamicSpectrogram(activeEvents, this.parsedData.statistics);
+        VisualiserCore.renderFrame(activeEvents);
+        VisualiserCore.updateDynamicSpectrogram(activeEvents, this.parsedData.statistics);
     },
 
     getActiveEventsForWindow: function() {
@@ -181,8 +181,8 @@ const OfflineProvider = {
         await this.ensureChunkLoadedForTime(this.currentTime);
         const activeEvents = this.getActiveEventsForWindow();
         
-        VisualizerCore.renderFrame(activeEvents);
-        if (timestamp - this.lastDynUpdate > 100) { VisualizerCore.updateDynamicSpectrogram(activeEvents, this.parsedData.statistics); this.lastDynUpdate = timestamp; }
+        VisualiserCore.renderFrame(activeEvents);
+        if (timestamp - this.lastDynUpdate > 100) { VisualiserCore.updateDynamicSpectrogram(activeEvents, this.parsedData.statistics); this.lastDynUpdate = timestamp; }
 
         if (this.isPlaying) this.animationFrameId = requestAnimationFrame((ts) => this.playLoop(ts));
     }

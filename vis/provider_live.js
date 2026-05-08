@@ -11,7 +11,7 @@ const LiveProvider = {
     API_URL: "http://your-telemetry-gateway.local/api", // Update to your FastApi/NodeJS proxy
 
     init: async function() {
-        VisualizerCore.init("visCanvas");
+        VisualiserCore.init("visCanvas");
         
         // Hide offline UI elements if they exist on the page
         ["profileLoader", "timeSlider", "btn-play", "speedSlider"].forEach(id => {
@@ -24,7 +24,7 @@ const LiveProvider = {
             // 1. Fetch hardware layout
             const topoRes = await fetch(`${this.API_URL}/topology`);
             const topoData = await topoRes.json();
-            VisualizerCore.buildTopology(topoData.hardware_blueprint, topoData.topology, topoData.metadata);
+            VisualiserCore.buildTopology(topoData.hardware_blueprint, topoData.topology, topoData.metadata);
             
             // 2. Sync to DB clock (delay by 2s to allow batch inserts to arrive)
             const syncRes = await fetch(`${this.API_URL}/time`);
@@ -84,7 +84,7 @@ const LiveProvider = {
         // Grab recent events from RAM
         const activeEvents = this.eventBuffer.filter(e => e.time <= this.currentTime && e.time >= minWin);
 
-        VisualizerCore.renderFrame(activeEvents);
+        VisualiserCore.renderFrame(activeEvents);
         
         requestAnimationFrame((ts) => this.renderLoop(ts));
     }
