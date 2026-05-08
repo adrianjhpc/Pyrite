@@ -86,18 +86,35 @@ static void file_record_event(telemetry_event_t *event) {
     if (event->is_large == 0) {
         if (!small_output_file) return;
         small_node_no_link_t s = {
-            .time = event->time, .id = event->id, .message_type = event->message_type,
-            .sender = event->sender, .receiver = event->receiver, 
-            .count = event->count, .bytes = event->bytes
+            .time = event->time, 
+            .id = event->id, 
+            .message_type = event->message_type,
+            .comm = event->comm, 
+            .tag = event->tag, 
+            .sender = event->sender, 
+            .receiver = event->receiver, 
+            .count = event->count, 
+            .bytes = event->bytes
         };
         fwrite(&s, sizeof(small_node_no_link_t), 1, small_output_file);
         small_count++;
     } else {
         if (!large_output_file) return;
         large_node_no_link_t l = {
-            .time = event->time, .id = event->id, .message_type = event->message_type,
-            .sender1 = event->sender, .receiver1 = event->receiver, .count1 = event->count, .bytes1 = event->bytes,
-            .sender2 = event->sender2, .receiver2 = event->receiver2, .count2 = event->count2, .bytes2 = event->bytes2
+            .time = event->time, 
+            .id = event->id, 
+            .message_type = event->message_type,
+            .comm = event->comm,
+            .sender1 = event->sender, 
+            .receiver1 = event->receiver, 
+            .count1 = event->count, 
+            .bytes1 = event->bytes,
+            .tag1 = event->tag,
+            .sender2 = event->sender2, 
+            .receiver2 = event->receiver2, 
+            .count2 = event->count2, 
+            .bytes2 = event->bytes2,
+            .tag2 = event->tag2
         };
         fwrite(&l, sizeof(large_node_no_link_t), 1, large_output_file);
         large_count++;
