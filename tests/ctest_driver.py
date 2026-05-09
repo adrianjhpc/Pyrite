@@ -1858,6 +1858,25 @@ def validate_fortran_gather(trace):
         require_large_zero_tags(rec, "fortran_gather")
         require_comm_int(rec, "comm", "fortran_gather comm")
 
+def validate_fortran_gather_f08(trace):
+    require(trace["world_size"] == 4, "fortran_gather_f08: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["large"],
+            message_type=MPI_GATHER_TYPE,
+            sender1=r,
+            receiver1=3,
+            count1=2,
+            bytes1=8,
+            sender2=3,
+            receiver2=3,
+            count2=(8 if r == 3 else 0),
+            bytes2=(32 if r == 3 else 0),
+        )
+        require_large_zero_tags(rec, "fortran_gather_f08")
+        require_comm_int(rec, "comm", "fortran_gather_f08 comm")
+
 def validate_fortran_scatter(trace):
     require(trace["world_size"] == 4, "fortran_scatter: world size should be 4")
 
@@ -1877,6 +1896,25 @@ def validate_fortran_scatter(trace):
         require_large_zero_tags(rec, "fortran_scatter")
         require_comm_int(rec, "comm", "fortran_scatter comm")
 
+def validate_fortran_scatter_f08(trace):
+    require(trace["world_size"] == 4, "fortran_scatter_f08: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["large"],
+            message_type=MPI_SCATTER_TYPE,
+            sender1=0,
+            receiver1=0,
+            count1=(28 if r == 0 else 0),
+            bytes1=(112 if r == 0 else 0),
+            sender2=0,
+            receiver2=r,
+            count2=7,
+            bytes2=28,
+        )
+        require_large_zero_tags(rec, "fortran_scatter_f08")
+        require_comm_int(rec, "comm", "fortran_scatter_f08 comm")
+
 def validate_fortran_allgather(trace):
     require(trace["world_size"] == 4, "fortran_allgather: world size should be 4")
 
@@ -1895,6 +1933,25 @@ def validate_fortran_allgather(trace):
         )
         require_large_zero_tags(rec, "fortran_allgather")
         require_comm_int(rec, "comm", "fortran_allgather comm")
+
+def validate_fortran_allgather_f08(trace):
+    require(trace["world_size"] == 4, "fortran_allgather_f08: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["large"],
+            message_type=MPI_ALLGATHER_TYPE,
+            sender1=r,
+            receiver1=r,
+            count1=1,
+            bytes1=4,
+            sender2=r,
+            receiver2=r,
+            count2=4,
+            bytes2=16,
+        )
+        require_large_zero_tags(rec, "fortran_allgather_f08")
+        require_comm_int(rec, "comm", "fortran_allgather_f08 comm")
 
 def validate_fortran_cancel(trace):
     require(trace["world_size"] == 2, "fortran_cancel: world size should be 2")
@@ -1946,6 +2003,56 @@ def validate_fortran_cancel(trace):
     require_comm_int(b0, "comm", "fortran_cancel barrier rank0 comm")
     require_comm_int(b1, "comm", "fortran_cancel barrier rank1 comm")
 
+def validate_fortran_cancel_f08(trace):
+    require(trace["world_size"] == 2, "fortran_cancel_f08: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    require_none(
+        rank1["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    wait = require_one(
+        rank1["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+    b0 = require_one(
+        rank0["small"],
+        message_type=MPI_BARRIER_TYPE,
+        sender=0,
+        receiver=0,
+        count=0,
+        bytes=0,
+    )
+
+    b1 = require_one(
+        rank1["small"],
+        message_type=MPI_BARRIER_TYPE,
+        sender=1,
+        receiver=1,
+        count=0,
+        bytes=0,
+    )
+
+    require(isinstance(wait["tag"], int), "fortran_cancel_f08 wait tag should be int")
+    require(isinstance(wait["comm"], int), "fortran_cancel_f08 wait comm should be int")
+
+    require_zero(b0, "tag", "fortran_cancel_f08 barrier rank0 tag")
+    require_zero(b1, "tag", "fortran_cancel_f08 barrier rank1 tag")
+    require_comm_int(b0, "comm", "fortran_cancel_f08 barrier rank0 comm")
+    require_comm_int(b1, "comm", "fortran_cancel_f08 barrier rank1 comm")
+
 VALIDATORS = {
     "send_recv": validate_send_recv,
     "any_source": validate_any_source,
@@ -1967,19 +2074,33 @@ VALIDATORS = {
     "fortran_waitall": validate_fortran_waitall,
     "fortran_waitall_f08": validate_fortran_waitall_f08,
     "fortran_waitany": validate_fortran_waitany,
+    "fortran_waitany_f08": validate_fortran_waitany_f08,
     "fortran_testall": validate_fortran_testall,
+    "fortran_testall_f08": validate_fortran_testall_f08,
     "fortran_bsend": validate_fortran_bsend,
+    "fortran_bsend_f08": validate_fortran_bsend_f08,
     "fortran_ssend": validate_fortran_ssend,
+    "fortran_ssend_f08": validate_fortran_ssend_f08,
     "fortran_rsend": validate_fortran_rsend,
+    "fortran_rsend_f08": validate_fortran_rsend_f08,
     "fortran_sendrecv": validate_sendrecv,
+    "fortran_sendrecv_f08": validate_sendrecv_f08,
     "fortran_barrier": validate_fortran_barrier,
+    "fortran_barrier_f08": validate_fortran_barrier_f08,
     "fortran_bcast": validate_fortran_bcast,
+    "fortran_bcast_f08": validate_fortran_bcast_f08,
     "fortran_reduce": validate_fortran_reduce,
+    "fortran_reduce_f08": validate_fortran_reduce_f08,
     "fortran_allreduce": validate_fortran_allreduce,
+    "fortran_allreduce_f08": validate_fortran_allreduce_f08,
     "fortran_gather": validate_fortran_gather,
+    "fortran_gather_f08": validate_fortran_gather_f08,
     "fortran_scatter": validate_fortran_scatter,
+    "fortran_scatter_f08": validate_fortran_scatter_f08,
     "fortran_allgather": validate_fortran_allgather,
+    "fortran_allgather_f08": validate_fortran_allgather_f08,
     "fortran_cancel": validate_fortran_cancel,
+    "fortran_cancel_f08": validate_fortran_cancel_f08,
 }
 
 # -----------------------------------------------------------------------------
