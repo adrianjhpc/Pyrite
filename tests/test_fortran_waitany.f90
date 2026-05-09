@@ -5,7 +5,7 @@ program test_fortran_waitany
   integer :: ierr, rank, size
   integer :: ready, ack
   integer :: send0, send1
-  integer :: recv0(4), recv1(4)
+  integer, asynchronous :: recv0(4), recv1(4)
   integer :: reqs(2)
   integer :: status(MPI_STATUS_SIZE)
   integer :: index, count

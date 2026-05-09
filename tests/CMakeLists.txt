@@ -256,6 +256,7 @@ add_mpi_trace_case(testsome                     test_testsome.c                 
 if(MPI_TRACE_HAVE_FORTRAN_TESTS)
     add_mpi_trace_fortran_case(fortran_nonblocking_wait             test_fortran_nonblocking_wait.f90             2)
     add_mpi_trace_fortran_case(fortran_nonblocking_any_source_wait  test_fortran_nonblocking_any_source_wait.f90  3)
+    add_mpi_trace_fortran_case(fortran_nonblocking_any_source_wait_f08  test_fortran_nonblocking_any_source_wait_f08.f90  3)
     add_mpi_trace_fortran_case(fortran_waitall                      test_fortran_waitall.f90                      2)
     add_mpi_trace_fortran_case(fortran_waitany                      test_fortran_waitany.f90                      2)
     add_mpi_trace_fortran_case(fortran_testall                      test_fortran_testall.f90                      2)

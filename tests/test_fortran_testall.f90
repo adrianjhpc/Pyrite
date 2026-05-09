@@ -5,7 +5,7 @@ program test_fortran_testall
   integer :: ierr, rank, size
   integer :: ready
   integer :: send0, send1
-  integer :: recv0(4), recv1(4)
+  integer, asynchronous :: recv0(4), recv1(4)
   integer :: reqs(2)
   integer :: statuses(MPI_STATUS_SIZE, 2)
   logical :: flag

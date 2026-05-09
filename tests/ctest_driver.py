@@ -1206,6 +1206,49 @@ def validate_fortran_nonblocking_any_source_wait(trace):
     require_same_value(send1, "tag", send2, "tag", "fortran_nonblocking_any_source_wait send tags")
     require_control_zero_or_from_refs(wait, irecv, "fortran_nonblocking_any_source_wait wait")
 
+def validate_fortran_nonblocking_any_source_wait_f08(trace):
+    require(trace["world_size"] == 3, "fortran_nonblocking_any_source_wait_f08: world size should be 3")
+
+    irecv = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=1,
+        receiver=0,
+        count=1,
+        bytes=4,
+    )
+
+    wait = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=0,
+        receiver=0,
+        count=1,
+        bytes=0,
+    )
+
+    send1 = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_SEND_TYPE,
+        sender=1,
+        receiver=0,
+        count=1,
+        bytes=4,
+    )
+
+    send2 = require_one(
+        trace["sections"][2]["small"],
+        message_type=MPI_SEND_TYPE,
+        sender=2,
+        receiver=0,
+        count=1,
+        bytes=4,
+    )
+
+    require_ptp_pair(send1, irecv, "fortran_nonblocking_any_source_wait_f08 matched pair")
+    require_same_value(send1, "tag", send2, "tag", "fortran_nonblocking_any_source_wait_f08 send tags")
+    require_control_zero_or_from_refs(wait, irecv, "fortran_nonblocking_any_source_wait_f08 wait")
+
 def validate_fortran_waitall(trace):
     require(trace["world_size"] == 2, "fortran_waitall: world size should be 2")
 
@@ -1602,6 +1645,7 @@ VALIDATORS = {
     "testsome": validate_testsome,
     "fortran_nonblocking_wait": validate_fortran_nonblocking_wait,
     "fortran_nonblocking_any_source_wait": validate_fortran_nonblocking_any_source_wait,
+    "fortran_nonblocking_any_source_wait_f08": validate_fortran_nonblocking_any_source_wait_f08,
     "fortran_waitall": validate_fortran_waitall,
     "fortran_waitany": validate_fortran_waitany,
     "fortran_testall": validate_fortran_testall,
