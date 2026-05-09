@@ -201,6 +201,7 @@ const OfflineProvider = {
 
     togglePlayback: function() {
         this.isPlaying = !this.isPlaying;
+        VisualiserCore.isDecayEnabled = this.isPlaying;
         const btn = document.getElementById("btn-play");
         if (btn) btn.innerHTML = this.isPlaying ? "<b>|| Pause</b>" : "<b>▶ Play</b>";
         if (this.isPlaying) { this.lastFrameTime = performance.now(); this.playLoop(performance.now()); }
@@ -209,6 +210,7 @@ const OfflineProvider = {
 
     pausePlayback: function() {
         this.isPlaying = false;
+        VisualiserCore.isDecayEnabled = false;
         const btn = document.getElementById("btn-play");
         if (btn) btn.innerHTML = "<b>▶ Play</b>";
         cancelAnimationFrame(this.animationFrameId);

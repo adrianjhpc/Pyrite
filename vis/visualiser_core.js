@@ -41,7 +41,8 @@ window.VisualiserCore = {
     defaultRankColor: new THREE.Color(0x4b5563),
     sharedMaterials: {},
     tooltipEl: null,
-    
+    isDecayEnabled: true,   
+ 
     // UI/Camera State
     uiMediaRecorder: null, uiRecordedChunks: [], uiStream: null,
     defaultCameraPose: null, selectedObject: null, isFollowEnabled: false,
@@ -134,7 +135,7 @@ window.VisualiserCore = {
         if (this.isFollowEnabled) this.updateFollowCamera();
         else this.controls.update();
 
-        if (this.activelyGlowingRanks.size > 0) {
+        if (this.isDecayEnabled && this.activelyGlowingRanks.size > 0) {
             this.activelyGlowingRanks.forEach((state, rankId) => {
                 state.intensity -= 0.02;
                 if (state.intensity <= 0) {
