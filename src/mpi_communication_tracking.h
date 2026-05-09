@@ -39,6 +39,8 @@ extern "C" {
 #define MPI_TESTANY_TYPE    36
 #define MPI_TESTALL_TYPE    37
 #define MPI_TESTSOME_TYPE   38
+#define MPI_INIT_TYPE       39  
+#define MPI_FINALIZE_TYPE   40  
 
   // Data structures for the file approach
   typedef struct small_node_no_link {

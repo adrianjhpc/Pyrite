@@ -38,6 +38,8 @@ MESSAGE_TYPES = {
     36: "MPI_TESTANY",
     37: "MPI_TESTALL",
     38: "MPI_TESTSOME",
+    39: "MPI_INIT",
+    40: "MPI_FINALIZE",
 }
 
 MESSAGE_TYPE_ORDER = {name: code for code, name in MESSAGE_TYPES.items()}
@@ -72,7 +74,7 @@ COMPLETION_CALLS = {
 }
 
 SYNC_CALLS = {
-    "MPI_BARRIER",
+    "MPI_BARRIER", "MPI_INIT", "MPI_FINALIZE",
 }
 
 ROOTED_COLLECTIVES = {

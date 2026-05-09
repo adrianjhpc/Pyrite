@@ -605,6 +605,10 @@ static int begin_tracking_runtime(void) {
   }
 
   tracking_initialized = 1;
+
+  double ts = trace_timestamp();
+  record_small_event(ts, MPI_INIT_TYPE, MPI_Comm_c2f(MPI_COMM_WORLD), 0, tracking_my_rank, tracking_my_rank, 0, MPI_DATATYPE_NULL);
+
   return MPI_SUCCESS;
 }
 
@@ -622,6 +626,9 @@ int MPI_Init(int *argc, char ***argv) {
 
 int MPI_Finalize(void) {
   if (!tracking_initialized) return PMPI_Finalize();
+
+  double ts = trace_timestamp();
+  record_small_event(ts, MPI_FINALIZE_TYPE, MPI_Comm_c2f(MPI_COMM_WORLD), 0, tracking_my_rank, tracking_my_rank, 0, MPI_DATATYPE_NULL);
 
   if (current_backend && current_backend->finalize_backend) {
     current_backend->finalize_backend();

@@ -29,6 +29,8 @@ const MPI_CATEGORIES = {
     "MPI_GATHER": { type: "collective", color: 0xd29922 },
     "MPI_SCATTER": { type: "collective", color: 0xd29922 },
     "MPI_ALLGATHER": { type: "collective", color: 0xd29922 },
+    "MPI_INIT": { type: "state", color: 0x2ea043 }, 
+    "MPI_FINALIZE": { type: "state", color: 0x2ea043 },
     "MPI_BARRIER": { type: "collective", color: 0xd29922 }
 };
 const DEFAULT_CATEGORY = { type: "unknown", color: 0x8b949e };
