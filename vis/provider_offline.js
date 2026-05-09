@@ -39,6 +39,9 @@ const OfflineProvider = {
             const headerText = await this.decompressBlob(this.uploadedFilePointer.slice(4, this.headerLengthOffset));
             
             this.parsedData = JSON.parse(headerText);
+            
+            window.parsedData = this.parsedData; 
+            
             this.parsedData.timeline = [];
             this.currentLoadedChunkIndex = -1;
             
@@ -47,7 +50,7 @@ const OfflineProvider = {
             alert("Failed to parse the MPI profile data.");
             console.error(error);
         }
-    },
+    }, 
 
     initDashboard: function() {
         this.pausePlayback();
@@ -65,6 +68,13 @@ const OfflineProvider = {
         // Hand the blueprint off to the core
         VisualiserCore.buildTopology(this.parsedData.hardware_blueprint, this.parsedData.topology, this.parsedData.metadata || this.parsedData.info);
         VisualiserCore.initSpectrograms(this.parsedData.statistics);
+
+        if (window.AnalyticsUI) {
+            AnalyticsUI.renderAnalytics();
+        }
+        if (window.Analytics3D) {
+            Analytics3D.refreshHighlights();
+        }
 
         this.seekToTime(this.minTime).catch(err => { console.error(err); this.pausePlayback(); });
     },
@@ -138,6 +148,10 @@ const OfflineProvider = {
         this.currentTime = time;
         if (document.getElementById("timeSlider")) document.getElementById("timeSlider").value = this.currentTime;
         if (document.getElementById("currentTimeLabel")) document.getElementById("currentTimeLabel").textContent = this.currentTime.toFixed(3);
+        
+        if (window.AnalyticsUI) {
+            AnalyticsUI.updateAnalyticsTimeWindowIndicator(this.currentTime);
+        }
         
         await this.ensureChunkLoadedForTime(this.currentTime);
         const activeEvents = this.getActiveEventsForWindow();
