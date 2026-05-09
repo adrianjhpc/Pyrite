@@ -1561,6 +1561,74 @@ def validate_fortran_testall_f08(trace):
 
     require_control_zero_or_from_refs(testall, recvs, "fortran_testall_f08 control")
 
+def validate_fortran_sendrecv(trace):
+    require(trace["world_size"] == 2, "fortran_sendrecv: world size should be 2")
+
+    r0 = require_one(
+        trace["sections"][0]["large"],
+        message_type=MPI_SENDRECV_TYPE,
+        sender1=0,
+        receiver1=1,
+        count1=1,
+        bytes1=4,
+        sender2=1,
+        receiver2=0,
+        count2=1,
+        bytes2=4,
+    )
+
+    r1 = require_one(
+        trace["sections"][1]["large"],
+        message_type=MPI_SENDRECV_TYPE,
+        sender1=1,
+        receiver1=0,
+        count1=1,
+        bytes1=4,
+        sender2=0,
+        receiver2=1,
+        count2=1,
+        bytes2=4,
+    )
+
+    require_comm_int(r0, "comm", "fortran_sendrecv rank0 comm")
+    require_comm_int(r1, "comm", "fortran_ssendrecv rank1 comm")
+    require_same_value(r0, "tag1", r1, "tag2", "fortran_ssendrecv rank0 sendtag vs rank1 recvtag")
+    require_same_value(r0, "tag2", r1, "tag1", "fortran_ssendrecv rank0 recvtag vs rank1 sendtag")
+
+def validate_fortran_sendrecv_f08(trace):
+    require(trace["world_size"] == 2, "fortran_sendrecv_f08: world size should be 2")
+
+    r0 = require_one(
+        trace["sections"][0]["large"],
+        message_type=MPI_SENDRECV_TYPE,
+        sender1=0,
+        receiver1=1,
+        count1=1,
+        bytes1=4,
+        sender2=1,
+        receiver2=0,
+        count2=1,
+        bytes2=4,
+    )
+
+    r1 = require_one(
+        trace["sections"][1]["large"],
+        message_type=MPI_SENDRECV_TYPE,
+        sender1=1,
+        receiver1=0,
+        count1=1,
+        bytes1=4,
+        sender2=0,
+        receiver2=1,
+        count2=1,
+        bytes2=4,
+    )
+
+    require_comm_int(r0, "comm", "fortran_sendrecv_f08 rank0 comm")
+    require_comm_int(r1, "comm", "fortran_ssendrecv_f08 rank1 comm")
+    require_same_value(r0, "tag1", r1, "tag2", "fortran_ssendrecv_f08 rank0 sendtag vs rank1 recvtag")
+    require_same_value(r0, "tag2", r1, "tag1", "fortran_ssendrecv_f08 rank0 recvtag vs rank1 sendtag")
+
 def validate_fortran_bsend(trace):
     require(trace["world_size"] == 2, "fortran_bsend: world size should be 2")
 
@@ -2083,8 +2151,8 @@ VALIDATORS = {
     "fortran_ssend_f08": validate_fortran_ssend_f08,
     "fortran_rsend": validate_fortran_rsend,
     "fortran_rsend_f08": validate_fortran_rsend_f08,
-    "fortran_sendrecv": validate_sendrecv,
-    "fortran_sendrecv_f08": validate_sendrecv_f08,
+    "fortran_sendrecv": validate_fortran_sendrecv,
+    "fortran_sendrecv_f08": validate_fortran_sendrecv_f08,
     "fortran_barrier": validate_fortran_barrier,
     "fortran_barrier_f08": validate_fortran_barrier_f08,
     "fortran_bcast": validate_fortran_bcast,
