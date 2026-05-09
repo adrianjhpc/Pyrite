@@ -1436,6 +1436,55 @@ def validate_fortran_waitany(trace):
     require_control_zero_or_from_refs(waitany, recvs, "fortran_waitany control")
     require_control_zero_or_from_refs(wait, recvs, "fortran_waitany trailing wait")
 
+def validate_fortran_waitany_f08(trace):
+    require(trace["world_size"] == 2, "fortran_waitany_f08: world size should be 2")
+
+    sends = require_n(
+        trace["sections"][0]["small"],
+        2,
+        message_type=MPI_SEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    recvs = require_n(
+        trace["sections"][1]["small"],
+        2,
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    waitany = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_WAITANY_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+    wait = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+    require_local_same_comm(sends, "fortran_waitany_f08 sends")
+    require_local_same_comm(recvs, "fortran_waitany_f08 recvs")
+    require_same_tag_multiset(sends, recvs, "fortran_waitany_f08 send/recv tags")
+
+    require_control_zero_or_from_refs(waitany, recvs, "fortran_waitany_f08 control")
+    require_control_zero_or_from_refs(wait, recvs, "fortran_waitany_f08 trailing wait")
+
+
 def validate_fortran_testall(trace):
     require(trace["world_size"] == 2, "fortran_testall: world size should be 2")
 
@@ -1474,6 +1523,44 @@ def validate_fortran_testall(trace):
 
     require_control_zero_or_from_refs(testall, recvs, "fortran_testall control")
 
+def validate_fortran_testall_f08(trace):
+    require(trace["world_size"] == 2, "fortran_testall_f08: world size should be 2")
+
+    sends = require_n(
+        trace["sections"][0]["small"],
+        2,
+        message_type=MPI_SEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    recvs = require_n(
+        trace["sections"][1]["small"],
+        2,
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    testall = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_TESTALL_TYPE,
+        sender=1,
+        receiver=1,
+        count=2,
+        bytes=0,
+    )
+
+    require_local_same_comm(sends, "fortran_testall_f08 sends")
+    require_local_same_comm(recvs, "fortran_testall_f08 recvs")
+    require_same_tag_multiset(sends, recvs, "fortran_testall_f08 send/recv tags")
+
+    require_control_zero_or_from_refs(testall, recvs, "fortran_testall_f08 control")
+
 def validate_fortran_bsend(trace):
     require(trace["world_size"] == 2, "fortran_bsend: world size should be 2")
 
@@ -1497,6 +1584,29 @@ def validate_fortran_bsend(trace):
 
     require_ptp_pair(bsend, recv, "fortran_bsend")
 
+def validate_fortran_bsend_f08(trace):
+    require(trace["world_size"] == 2, "fortran_bsend_f08: world size should be 2")
+
+    bsend = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_BSEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    recv = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_RECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_ptp_pair(bsend, recv, "fortran_bsend_f08")
+
 def validate_fortran_ssend(trace):
     require(trace["world_size"] == 2, "fortran_ssend: world size should be 2")
 
@@ -1519,6 +1629,29 @@ def validate_fortran_ssend(trace):
     )
 
     require_ptp_pair(ssend, recv, "fortran_ssend")
+
+def validate_fortran_ssend_f08(trace):
+    require(trace["world_size"] == 2, "fortran_ssend_f08: world size should be 2")
+
+    ssend = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_SSEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    recv = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_RECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_ptp_pair(ssend, recv, "fortran_ssend_f08")
 
 def validate_fortran_rsend(trace):
     require(trace["world_size"] == 2, "fortran_rsend: world size should be 2")
@@ -1553,6 +1686,39 @@ def validate_fortran_rsend(trace):
     require_ptp_pair(rsend, irecv, "fortran_rsend")
     require_control_zero_or_from_refs(wait, irecv, "fortran_rsend wait")
 
+def validate_fortran_rsend_f08(trace):
+    require(trace["world_size"] == 2, "fortran_rsend_f08: world size should be 2")
+
+    rsend = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_RSEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    irecv = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    wait = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+    require_ptp_pair(rsend, irecv, "fortran_rsend_f08")
+    require_control_zero_or_from_refs(wait, irecv, "fortran_rsend_f08 wait")
+
 def validate_fortran_barrier(trace):
     require(trace["world_size"] == 3, "fortran_barrier: world size should be 3")
 
@@ -1567,6 +1733,21 @@ def validate_fortran_barrier(trace):
         )
         require_zero(rec, "tag", "fortran_barrier tag")
         require_comm_int(rec, "comm", "fortran_barrier comm")
+
+def validate_fortran_barrier_f08(trace):
+    require(trace["world_size"] == 3, "fortran_barrier_f08: world size should be 3")
+
+    for r in range(3):
+        rec = require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_BARRIER_TYPE,
+            sender=r,
+            receiver=r,
+            count=0,
+            bytes=0,
+        )
+        require_zero(rec, "tag", "fortran_barrier_f08 tag")
+        require_comm_int(rec, "comm", "fortran_barrier_f08 comm")
 
 def validate_fortran_bcast(trace):
     require(trace["world_size"] == 4, "fortran_bcast: world size should be 4")
@@ -1583,6 +1764,21 @@ def validate_fortran_bcast(trace):
         require_zero(rec, "tag", "fortran_bcast tag")
         require_comm_int(rec, "comm", "fortran_bcast comm")
 
+def validate_fortran_bcast_f08(trace):
+    require(trace["world_size"] == 4, "fortran_bcast_f08: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_BCAST_TYPE,
+            sender=2,
+            receiver=r,
+            count=3,
+            bytes=12,
+        )
+        require_zero(rec, "tag", "fortran_bcast_f08 tag")
+        require_comm_int(rec, "comm", "fortran_bcast_f08 comm")
+
 def validate_fortran_reduce(trace):
     require(trace["world_size"] == 4, "fortran_reduce: world size should be 4")
 
@@ -1598,6 +1794,21 @@ def validate_fortran_reduce(trace):
         require_zero(rec, "tag", "fortran_reduce tag")
         require_comm_int(rec, "comm", "fortran_reduce comm")
 
+def validate_fortran_reduce_f08(trace):
+    require(trace["world_size"] == 4, "fortran_reduce_f08: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_REDUCE_TYPE,
+            sender=r,
+            receiver=1,
+            count=5,
+            bytes=20,
+        )
+        require_zero(rec, "tag", "fortran_reduce_f08 tag")
+        require_comm_int(rec, "comm", "fortran_reduce_f08 comm")
+
 def validate_fortran_allreduce(trace):
     require(trace["world_size"] == 4, "fortran_allreduce: world size should be 4")
 
@@ -1612,6 +1823,21 @@ def validate_fortran_allreduce(trace):
         )
         require_zero(rec, "tag", "fortran_allreduce tag")
         require_comm_int(rec, "comm", "fortran_allreduce comm")
+
+def validate_fortran_allreduce_f08(trace):
+    require(trace["world_size"] == 4, "fortran_allreduce_f08: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_ALLREDUCE_TYPE,
+            sender=r,
+            receiver=r,
+            count=4,
+            bytes=16,
+        )
+        require_zero(rec, "tag", "fortran_allreduce_f08 tag")
+        require_comm_int(rec, "comm", "fortran_allreduce_f08 comm")
 
 def validate_fortran_gather(trace):
     require(trace["world_size"] == 4, "fortran_gather: world size should be 4")
