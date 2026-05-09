@@ -1163,6 +1163,49 @@ def validate_fortran_nonblocking_wait(trace):
     require_control_zero_or_from_refs(w0, isend, "fortran_nonblocking_wait rank0 wait")
     require_control_zero_or_from_refs(w1, irecv, "fortran_nonblocking_wait rank1 wait")
 
+def validate_fortran_nonblocking_wait_f08(trace):
+    require(trace["world_size"] == 2, "fortran_nonblocking_wait_f08: world size should be 2")
+
+    isend = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_ISEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    w0 = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=0,
+        receiver=0,
+        count=1,
+        bytes=0,
+    )
+
+    irecv = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    w1 = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+    require_ptp_pair(isend, irecv, "fortran_nonblocking_wait_f08")
+    require_control_zero_or_from_refs(w0, isend, "fortran_nonblocking_wait_f08 rank0 wait")
+    require_control_zero_or_from_refs(w1, irecv, "fortran_nonblocking_wait_f08 rank1 wait")
+
 def validate_fortran_nonblocking_any_source_wait(trace):
     require(trace["world_size"] == 3, "fortran_nonblocking_any_source_wait: world size should be 3")
 
@@ -1296,6 +1339,54 @@ def validate_fortran_waitall(trace):
 
     require_control_zero_or_from_refs(w0, sends, "fortran_waitall rank0 waitall")
     require_control_zero_or_from_refs(w1, recvs, "fortran_waitall rank1 waitall")
+
+def validate_fortran_waitall_f08(trace):
+    require(trace["world_size"] == 2, "fortran_waitall_f08: world size should be 2")
+
+    sends = require_n(
+        trace["sections"][0]["small"],
+        2,
+        message_type=MPI_ISEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    w0 = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_WAITALL_TYPE,
+        sender=0,
+        receiver=0,
+        count=2,
+        bytes=0,
+    )
+
+    recvs = require_n(
+        trace["sections"][1]["small"],
+        2,
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    w1 = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_WAITALL_TYPE,
+        sender=1,
+        receiver=1,
+        count=2,
+        bytes=0,
+    )
+
+    require_local_same_comm(sends, "fortran_waitall_f08 sends")
+    require_local_same_comm(recvs, "fortran_waitall_f08 recvs")
+    require_same_tag_multiset(sends, recvs, "fortran_waitall_f08 send/recv tags")
+
+    require_control_zero_or_from_refs(w0, sends, "fortran_waitall rank0 waitall_f08")
+    require_control_zero_or_from_refs(w1, recvs, "fortran_waitall rank1 waitall_f08")
 
 def validate_fortran_waitany(trace):
     require(trace["world_size"] == 2, "fortran_waitany: world size should be 2")
@@ -1644,9 +1735,11 @@ VALIDATORS = {
     "testany": validate_testany,
     "testsome": validate_testsome,
     "fortran_nonblocking_wait": validate_fortran_nonblocking_wait,
+    "fortran_nonblocking_wait_f08": validate_fortran_nonblocking_wait_f08,
     "fortran_nonblocking_any_source_wait": validate_fortran_nonblocking_any_source_wait,
     "fortran_nonblocking_any_source_wait_f08": validate_fortran_nonblocking_any_source_wait_f08,
     "fortran_waitall": validate_fortran_waitall,
+    "fortran_waitall_f08": validate_fortran_waitall_f08,
     "fortran_waitany": validate_fortran_waitany,
     "fortran_testall": validate_fortran_testall,
     "fortran_bsend": validate_fortran_bsend,
