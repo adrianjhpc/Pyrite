@@ -1,21 +1,21 @@
 # Pyrite: MPI Communication Tracking and Visualiser
 
-Pyrite is a lightweight MPI tracing and visual analytics toolchain for HPC applications.
+Pyrite is a lightweight MPI tracing and visual analytics toolchain for HPC applications. 
 
-This project intercepts MPI communication at runtime, records a compact binary trace, converts it into a streamed visualisation format, extracts common communication patterns and likely performance problems, and provides a web based rendering tool to display the result on a 3D representation of your physical hardware topology.
+Designed for both **offline post-mortem analysis** and **live real-time telemetry**, this project intercepts MPI communication at runtime. It records compact binary traces (or streams them to a time-series database), extracts complex communication patterns, identifies performance bottlenecks (such as Late Senders and load imbalance), and provides a web-based rendering tool to display the results on a 3D representation of your physical hardware topology.
 
 ## Features
 
-- **Zero-code instrumentation** with `LD_PRELOAD`
-- **Low-overhead PMPI interception**
-- **Compact binary trace output** (`.mpic`)
-- **Chunked, streamed visualisation format** (`.mpix`)
-- **Support for blocking, nonblocking, and collective MPI calls**
-- **Analysis of communication patterns and performance issues**
-- **3D hardware-aware visualisation** in the browser
-- **Persistent 3D analytics overlays**
-- **Issue-card-to-3D isolation**
-- **Optional Fortran test coverage**
+- **Zero-code instrumentation** via `LD_PRELOAD`
+- **Dual-Mode Architecture:**
+  - **Offline Mode:** Compact binary trace output (`.mpic`) compressed into chunked visualisation containers (`.mpix`).
+  - **Live Mode:** Lock-free shared memory ring-buffers streamed via a C daemon to VictoriaMetrics, served to the browser via a lightweight FastAPI gateway.
+- **Deep Context Tracking:** Records `MPI_Comm` handles and `MPI_Tag` IDs for mathematically perfect point-to-point pairing.
+- **Advanced Timing Heuristics:** Calculates exact CPU block-time during Wait/Test calls to identify silent scaling killers like *Late Senders*, *Late Receivers*, and *Late Broadcasters*.
+- **Lifecycle Bookends:** Automatically captures `MPI_Init` and `MPI_Finalize` to visualise rank spin-up and shutdown skew.
+- **3D Hardware-Aware Visualisation** in the browser with interchangeable layouts (Blueprint, Top-Down, Rack-Front).
+- **Persistent Analytics Overlays** isolating problem ranks, hotspot links, and communication patterns directly in 3D space.
+
 
 ## Visualiser Interface
 
@@ -30,15 +30,26 @@ mpi-comm-tracker/
 ├── src/
 │   ├── CMakeLists.txt
 │   ├── mpi_communication_tracking.c
-│   └── mpi_communication_tracking.h
+│   ├── mpi_communication_tracking.h
+│   ├── backend_file.c         # File-based trace writer (.mpic)
+│   ├── backend_shm.c          # Live shared-memory telemetry provider
+│   └── telemetry_daemon.c     # Async HTTP ingestion daemon for Live Mode
+├── gateway/
+│   ├── Dockerfile
+│   ├── docker-compose.yml     # Orchestrates VictoriaMetrics + FastAPI
+│   ├── requirements.txt
+│   └── gateway.py             # Python API serving DB data to the browser
 ├── tools/
-│   ├── mpi_data_parser.py
+│   ├── mpi_data_parser.py     # Offline trace parser and heuristics engine
 │   ├── topology_generator.py
 │   └── slurm_topology_generator.py
 ├── vis/
-│   ├── index.html
+│   ├── index_offline.html     # Dashboard for .mpix file playback
+│   ├── index_live.html        # Dashboard for real-time cluster monitoring
 │   ├── style.css
-│   ├── visualiser.js
+│   ├── visualiser_core.js     # Shared 3D rendering engine (Three.js)
+│   ├── provider_offline.js    # Data provider for file playback
+│   ├── provider_live.js       # Data provider for gateway polling
 │   ├── analytics.js
 │   ├── analytics-3d.js
 │   └── analytics-controls.js
@@ -66,13 +77,15 @@ make
 This produces:
 
 ```text
-build/src/libmpi_comm_tracker.so
+build/src/libmpitrace_file.so
+build/src/libmpitrace_shm.so
+build/src/telemetry_daemon
 ```
 
 ### 2. Run an MPI application under the tracker
 
 ```bash
-LD_PRELOAD=/path/to/build/src/libmpi_comm_tracker.so mpirun -n 16 ./your_mpi_application
+LD_PRELOAD=/path/to/build/src/libmpitrace_file.so mpirun -n 16 ./your_mpi_application
 ```
 
 At `MPI_Finalize`, rank 0 writes a trace file like:
@@ -116,19 +129,47 @@ This creates:
 your_mpi_application-YYYYMMDDHHMMSS.mpix
 ```
 
-### 5. Open the visualiser
+
+## Visuaisation
+
+There are two visualisation modes that can be used. Offline visualisation uses the `libmpitrace_file.so` to produce the `*.mpix` file for a given application run, and then allows that to be visualised and explored.
+
+Online or live visualisation uses `libmpitrace_shm.so` and the telemetry daemon (`telemetry_daemon`) to record events from running applications in a central database and then visualise running applications in realtime.;
+
+
+### Offline visualiser
 
 Open:
 
 ```text
-vis/index.html
+vis/index_offline.html
 ```
 
 Then load the generated `.mpix` file.
 
+### Online/Live visualiser
+
+#### Spin up the Database and Gateway
+Move to a management or login node and start the Docker orchestration:
+```bash
+cd gateway
+docker compose up -d --build
+```
+This starts VictoriaMetrics (port 8428) and the FastAPI Gateway (port 8000). Make sure you place a `cluster_topology.json` file in this directory so the 3D engine knows how to build the system.
+
+#### Run the application
+Ensure your compute nodes are configured to point to the VictoriaMetrics IP in `telemetry_daemon.c`, then launch:
+
+```bash
+LD_PRELOAD=/path/to/build/src/libmpitrace_shm.so mpirun -n 16 ./your_mpi_application
+```
+
+#### Open the Live Dashboard
+Open `vis/index_live.html` in your browser. Ensure `provider_live.js` is pointed to your FastAPI gateway IP, and watch the cluster traffic stream in real-time.
+
 ---
 
-## What the Parser Produces
+## What the offline parser produces
 
 The `.mpix` container includes:
 
@@ -171,6 +212,10 @@ The frontend provides:
 ---
 
 ## Supported MPI Calls
+
+### Lifecycle and State
+- `MPI_Init`
+- `MPI_Finalize`
 
 ### Point-to-point
 - `MPI_Send`
@@ -225,7 +270,7 @@ cmake -S . -B build -DMPI_TRACE_FORTRAN_TESTS=OFF
 
 ## Limitations
 
-- Communicator identity is not yet stored explicitly in the trace format, meaning we only record global ranks for communications and do not differentiate between communicators
+- Communicator identity is not yet processed explicitly, meaning we only record global ranks for communications and do not differentiate between communicators
 - Some collective behaviour is approximated in the visualisation to make it visible 
 - The analytic functionality is currently based on heuristic approaches, not formal proof based functionality
 - Persistent MPI requests are not yet fully modelled
