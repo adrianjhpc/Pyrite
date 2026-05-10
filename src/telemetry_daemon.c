@@ -57,11 +57,6 @@ static void on_signal(int signo) {
     stop_requested = 1;
 }
 
-const char *db_url = getenv("PYRITE_DB_URL");
-if (db_url == NULL || db_url[0] == '\0') {
-    db_url = "http://127.0.0.1:8428/api/v1/import/prometheus"; // Default
-}
-
 static void install_signal_handlers(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -126,6 +121,12 @@ static size_t discard_response_cb(char *ptr, size_t size, size_t nmemb, void *us
 static int init_network(void) {
     CURLcode cc;
 
+    const char *db_url = getenv("PYRITE_DB_URL");
+    if (db_url == NULL || db_url[0] == '\0') {
+        db_url = "http://127.0.0.1:8428/api/v1/import/prometheus"; // Default
+    }
+
+
     cc = curl_global_init(CURL_GLOBAL_ALL);
     if (cc != CURLE_OK) {
         fprintf(stderr, "[Daemon] curl_global_init failed: %s\n", curl_easy_strerror(cc));
@@ -155,7 +156,7 @@ static int init_network(void) {
         return -1;
     }
 
-    cc = curl_easy_setopt(curl_handle, CURLOPT_URL, DB_URL);
+    cc = curl_easy_setopt(curl_handle, CURLOPT_URL, db_url);
     if (cc != CURLE_OK) goto fail;
     cc = curl_easy_setopt(curl_handle, CURLOPT_POST, 1L);
     if (cc != CURLE_OK) goto fail;
