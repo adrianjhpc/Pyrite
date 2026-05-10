@@ -42,6 +42,8 @@ MPI_TEST_TYPE = 35
 MPI_TESTANY_TYPE = 36
 MPI_TESTALL_TYPE = 37
 MPI_TESTSOME_TYPE = 38
+MPI_INIT = 39
+MPI_FINALIZE = 40
 
 # -----------------------------------------------------------------------------
 # Current MPIC file format constants
@@ -541,6 +543,42 @@ def validate_common_trace(trace):
                     "anchor mpi_time_zero should be finite for rank {}".format(rank))
             require(anchor["unix_time_zero_ns"] > 0,
                     "anchor unix_time_zero_ns should be positive for rank {}".format(rank))
+
+def verify_lifecycle_bookends(trace):
+    expected_ranks = trace["world_size"]
+    timeline = trace.get("timeline", [])
+    
+    init_events = [e for e in timeline if e["call"] == "MPI_INIT"]
+    finalize_events = [e for e in timeline if e["call"] == "MPI_FINALIZE"]
+
+    # Ensure every rank recorded an Init and a Finalize
+    if len(init_events) != expected_ranks:
+        print(f"FAIL: Expected {expected_ranks} MPI_INIT events, found {len(init_events)}.", file=sys.stderr)
+        sys.exit(1)
+        
+    if len(finalize_events) != expected_ranks:
+        print(f"FAIL: Expected {expected_ranks} MPI_FINALIZE events, found {len(finalize_events)}.", file=sys.stderr)
+        sys.exit(1)
+
+    # Ensure chronological sanity per rank
+    for rank in range(expected_ranks):
+        rank_events = [e for e in timeline if e["rank_recording"] == rank]
+        
+        if not rank_events:
+            continue
+            
+        first_event = rank_events[0]
+        last_event = rank_events[-1]
+
+        if first_event["call"] != "MPI_INIT":
+            print(f"FAIL: Rank {rank}'s first event was {first_event['call']}, expected MPI_INIT.", file=sys.stderr)
+            sys.exit(1)
+            
+        if last_event["call"] != "MPI_FINALIZE":
+            print(f"FAIL: Rank {rank}'s last event was {last_event['call']}, expected MPI_FINALIZE.", file=sys.stderr)
+            sys.exit(1)
+            
+    print("SUCCESS: Lifecycle bookends (Init/Finalize) verified for all ranks.")
 
 # -----------------------------------------------------------------------------
 # Validators
@@ -2230,6 +2268,7 @@ def main():
     )
 
     trace = parse_trace(traces[0])
+    verify_lifecycle_bookends(trace)
     validate_common_trace(trace)
     VALIDATORS[args.case](trace)
 
