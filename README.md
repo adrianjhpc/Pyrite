@@ -161,6 +161,10 @@ This starts VictoriaMetrics (port 8428) and the FastAPI Gateway (port 8000). Mak
 Ensure your compute nodes are configured to point to the VictoriaMetrics IP in `telemetry_daemon.c`, then launch:
 
 ```bash
+export PYRITE_DAEMON_PATH=/path/to/build/src/bin/telemetry_daemon
+export PYRITE_DB_URL=http://your-management-node-ip:8428/api/v1/import/prometheus
+
+srun -n 16 ./your_mpi_application
 LD_PRELOAD=/path/to/build/src/libmpitrace_shm.so mpirun -n 16 ./your_mpi_application
 ```
 

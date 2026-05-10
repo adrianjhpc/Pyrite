@@ -22,8 +22,6 @@
 
 #include "shared_telemetry.h"
 
-/* Central database endpoint */
-#define DB_URL "http://192.168.1.100:8428/write"
 
 #define PAYLOAD_BUFFER_SIZE   (2u * 1024u * 1024u)
 #define LINE_BUFFER_SIZE      1024u
@@ -57,6 +55,11 @@ typedef struct {
 static void on_signal(int signo) {
     (void)signo;
     stop_requested = 1;
+}
+
+const char *db_url = getenv("PYRITE_DB_URL");
+if (db_url == NULL || db_url[0] == '\0') {
+    db_url = "http://127.0.0.1:8428/api/v1/import/prometheus"; // Default
 }
 
 static void install_signal_handlers(void) {

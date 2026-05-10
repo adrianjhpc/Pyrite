@@ -246,11 +246,17 @@ static int spawn_daemon_checked(const char *region_name, pid_t parent_pid,
     int exec_err = 0;
     ssize_t nread;
     char pid_str[32];
+    const char *daemon_path;
 
     if (daemon_pid_out == NULL) {
         return MPI_ERR_ARG;
     }
     *daemon_pid_out = -1;
+
+    daemon_path = getenv("PYRITE_DAEMON_PATH");
+    if (daemon_path == NULL || daemon_path[0] == '\0') {
+        daemon_path = "/opt/mpi_telemetry/bin/telemetry_daemon";
+    }
 
     if (pipe(pipefd) != 0) {
         log_shm_error("pipe", errno);
@@ -279,7 +285,7 @@ static int spawn_daemon_checked(const char *region_name, pid_t parent_pid,
 
         snprintf(pid_str, sizeof(pid_str), "%d", (int)parent_pid);
 
-        execl("/opt/mpi_telemetry/bin/telemetry_daemon",
+        execl(daemon_path,
               "telemetry_daemon",
               region_name,
               pid_str,
