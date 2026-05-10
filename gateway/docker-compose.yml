@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: pyrite_db
+    ports:
+      # Port 8428 is exposed so your MPI C-Daemons can push data into the database
+      - "8428:8428"
+    command:
+      # Keep data for 1 day to prevent the DB from filling up your hard drive indefinitely
+      - "-retentionPeriod=1d" 
+    restart: unless-stopped
+
+  gateway:
+    build: ./gateway
+    container_name: pyrite_gateway
+    ports:
+      # Port 8000 is exposed so your web browser can fetch the formatted data
+      - "8000:8000"
+    environment:
+      # The Python script uses this to talk to the DB securely inside the Docker network
+      - DB_URL=http://victoriametrics:8428
+    depends_on:
+      - victoriametrics
+    restart: unless-stopped
