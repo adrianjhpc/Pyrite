@@ -546,38 +546,44 @@ def validate_common_trace(trace):
 
 def verify_lifecycle_bookends(trace):
     expected_ranks = trace["world_size"]
-    timeline = trace.get("timeline", [])
     
-    init_events = [e for e in timeline if e["call"] == "MPI_INIT"]
-    finalize_events = [e for e in timeline if e["call"] == "MPI_FINALIZE"]
-
-    # Ensure every rank recorded an Init and a Finalize
-    if len(init_events) != expected_ranks:
-        print(f"FAIL: Expected {expected_ranks} MPI_INIT events, found {len(init_events)}.", file=sys.stderr)
-        sys.exit(1)
-        
-    if len(finalize_events) != expected_ranks:
-        print(f"FAIL: Expected {expected_ranks} MPI_FINALIZE events, found {len(finalize_events)}.", file=sys.stderr)
-        sys.exit(1)
+    init_count = 0
+    finalize_count = 0
 
     # Ensure chronological sanity per rank
     for rank in range(expected_ranks):
-        rank_events = [e for e in timeline if e["rank_recording"] == rank]
+        # In the test driver, events are grouped by rank into 'sections'
+        section = trace["sections"][rank]
+        small_events = section["small"]
         
-        if not rank_events:
-            continue
+        if not small_events:
+            print(f"FAIL: Rank {rank} has no small events.", file=sys.stderr)
+            sys.exit(1)
             
-        first_event = rank_events[0]
-        last_event = rank_events[-1]
+        first_event = small_events[0]
+        last_event = small_events[-1]
 
-        if first_event["call"] != "MPI_INIT":
-            print(f"FAIL: Rank {rank}'s first event was {first_event['call']}, expected MPI_INIT.", file=sys.stderr)
+        if first_event["message_type"] != MPI_INIT:
+            print(f"FAIL: Rank {rank}'s first event type was {first_event['message_type']}, expected {MPI_INIT} (MPI_INIT).", file=sys.stderr)
             sys.exit(1)
+        else:
+            init_count += 1
             
-        if last_event["call"] != "MPI_FINALIZE":
-            print(f"FAIL: Rank {rank}'s last event was {last_event['call']}, expected MPI_FINALIZE.", file=sys.stderr)
+        if last_event["message_type"] != MPI_FINALIZE:
+            print(f"FAIL: Rank {rank}'s last event type was {last_event['message_type']}, expected {MPI_FINALIZE} (MPI_FINALIZE).", file=sys.stderr)
             sys.exit(1)
-            
+        else:
+            finalize_count += 1
+
+    # Ensure every rank recorded an Init and a Finalize
+    if init_count != expected_ranks:
+        print(f"FAIL: Expected {expected_ranks} MPI_INIT events, found {init_count}.", file=sys.stderr)
+        sys.exit(1)
+        
+    if finalize_count != expected_ranks:
+        print(f"FAIL: Expected {expected_ranks} MPI_FINALIZE events, found {finalize_count}.", file=sys.stderr)
+        sys.exit(1)
+        
     print("SUCCESS: Lifecycle bookends (Init/Finalize) verified for all ranks.")
 
 # -----------------------------------------------------------------------------
