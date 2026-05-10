@@ -1326,6 +1326,93 @@ def validate_barrier(trace):
         require_zero(rec, "tag", "barrier tag")
         require_comm_int(rec, "comm", "barrier comm")
 
+def validate_bcast(trace):
+    require(trace["world_size"] == 4, "bcast: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_BCAST_TYPE,
+            sender=2,
+            receiver=r,
+            count=3,
+            bytes=12,
+        )
+        require_zero(rec, "tag", "bcast tag")
+        require_comm_int(rec, "comm", "bcast comm")
+
+def validate_reduce(trace):
+    require(trace["world_size"] == 4, "reduce: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_REDUCE_TYPE,
+            sender=r,
+            receiver=1,
+            count=5,
+            bytes=20,
+        )
+        require_zero(rec, "tag", "reduce tag")
+        require_comm_int(rec, "comm", "reduce comm")
+
+def validate_gather(trace):
+    require(trace["world_size"] == 4, "gather: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["large"],
+            message_type=MPI_GATHER_TYPE,
+            sender1=r,
+            receiver1=3,
+            count1=2,
+            bytes1=8,
+            sender2=3,
+            receiver2=3,
+            count2=(8 if r == 3 else 0),
+            bytes2=(32 if r == 3 else 0),
+        )
+        require_large_zero_tags(rec, "gather")
+        require_comm_int(rec, "comm", "gather comm")
+
+def validate_scatter(trace):
+    require(trace["world_size"] == 4, "scatter: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["large"],
+            message_type=MPI_SCATTER_TYPE,
+            sender1=0,
+            receiver1=0,
+            count1=(28 if r == 0 else 0),
+            bytes1=(112 if r == 0 else 0),
+            sender2=0,
+            receiver2=r,
+            count2=7,
+            bytes2=28,
+        )
+        require_large_zero_tags(rec, "scatter")
+        require_comm_int(rec, "comm", "scatter comm")
+
+def validate_allgather(trace):
+    require(trace["world_size"] == 4, "allgather: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["large"],
+            message_type=MPI_ALLGATHER_TYPE,
+            sender1=r,
+            receiver1=r,
+            count1=1,
+            bytes1=4,
+            sender2=r,
+            receiver2=r,
+            count2=4,
+            bytes2=16,
+        )
+        require_large_zero_tags(rec, "allgather")
+        require_comm_int(rec, "comm", "allgather comm")
+
 def validate_fortran_init_finalize(trace):
     require(trace["world_size"] == 4, "init_fortran_finalize: world size should be 4")
 
@@ -2354,6 +2441,11 @@ VALIDATORS = {
     "barrier": validate_barrier,
     "allreduce": validate_allreduce,
     "cancel": validate_cancel,
+    "gather": validate_gather,
+    "scatter": validate_scatter,
+    "reduce": validate_reduce,
+    "bcast": validate_bcast,
+    "allgather": validate_allgather,
     "fortran_init_finalize": validate_fortran_init_finalize,
     "fortran_init_finalize_f08": validate_fortran_init_finalize_f08,
     "fortran_nonblocking_wait": validate_fortran_nonblocking_wait,
