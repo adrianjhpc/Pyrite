@@ -1,12 +1,12 @@
 program test_fortran_waitall
+  use mpi_f08
   implicit none
-  include 'mpif.h'
-
+ 
   integer :: ierr, rank, size
   integer :: send0, send1
   integer :: recv0, recv1
-  integer :: reqs(2)
-  integer :: statuses(MPI_STATUS_SIZE, 2)
+  type(MPI_Request) :: reqs(2)
+  type(MPI_Status)  :: statuses(2)
 
   call MPI_INIT(ierr)
   call MPI_COMM_RANK(MPI_COMM_WORLD, rank, ierr)

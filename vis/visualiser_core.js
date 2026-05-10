@@ -29,6 +29,8 @@ const MPI_CATEGORIES = {
     "MPI_GATHER": { type: "collective", color: 0xd29922 },
     "MPI_SCATTER": { type: "collective", color: 0xd29922 },
     "MPI_ALLGATHER": { type: "collective", color: 0xd29922 },
+    "MPI_INIT": { type: "state", color: 0x2ea043 }, 
+    "MPI_FINALIZE": { type: "state", color: 0x2ea043 },
     "MPI_BARRIER": { type: "collective", color: 0xd29922 }
 };
 const DEFAULT_CATEGORY = { type: "unknown", color: 0x8b949e };
@@ -41,7 +43,8 @@ window.VisualiserCore = {
     defaultRankColor: new THREE.Color(0x4b5563),
     sharedMaterials: {},
     tooltipEl: null,
-    
+    isDecayEnabled: true,   
+ 
     // UI/Camera State
     uiMediaRecorder: null, uiRecordedChunks: [], uiStream: null,
     defaultCameraPose: null, selectedObject: null, isFollowEnabled: false,
@@ -134,7 +137,7 @@ window.VisualiserCore = {
         if (this.isFollowEnabled) this.updateFollowCamera();
         else this.controls.update();
 
-        if (this.activelyGlowingRanks.size > 0) {
+        if (this.isDecayEnabled && this.activelyGlowingRanks.size > 0) {
             this.activelyGlowingRanks.forEach((state, rankId) => {
                 state.intensity -= 0.02;
                 if (state.intensity <= 0) {
@@ -377,7 +380,7 @@ window.VisualiserCore = {
             const sData = this.rankMap.get(event.sender);
             const rData = this.rankMap.get(event.receiver);
 
-            if (callType !== "MPI_WAIT" && callType !== "MPI_WAITALL") {
+            if (cat.type !== "state") {
                 const color = new THREE.Color(cat.color);
                 if (sData) {
                     this.activelyGlowingRanks.set(event.sender, { mesh: sData.mesh, instanceId: sData.instanceId, color: color, intensity: 1.0 });
@@ -595,15 +598,29 @@ window.VisualiserCore = {
         if (this.isFollowEnabled) this.followOffset.copy(this.camera.position).sub(this.controls.target);
     },
     updateFollowCamera: function() {
-        if (!this.isFollowEnabled || !this.selectedObject) return;
-        const targetPos = new THREE.Vector3();
-        if (this.selectedObject.userData?.isCore) targetPos.copy(this.selectedObject.worldPos);
-        else this.selectedObject.getWorldPosition(targetPos);
-        this.controls.target.lerp(targetPos, 0.18);
-        this.desiredCam.copy(this.controls.target).add(this.followOffset);
-        this.camera.position.lerp(this.desiredCam, 0.18);
-        this.controls.update();
-    },
+    if (!this.isFollowEnabled || !this.selectedObject) return;
+
+    const targetPos = new THREE.Vector3();
+
+    if (this.selectedObject.userData?.isCore && this.selectedObject.userData?.rank !== undefined) {
+        const rankId = this.selectedObject.userData.rank;
+        const rankState = this.rankMap.get(rankId);
+        if (!rankState) return;
+        targetPos.copy(rankState.localPos).applyMatrix4(rankState.nodeGroup.matrixWorld);
+    } else if (this.selectedObject.getWorldPosition) {
+        this.selectedObject.getWorldPosition(targetPos);
+    } else if (this.selectedObject.worldPos) {
+        targetPos.copy(this.selectedObject.worldPos);
+    } else {
+        return;
+    }
+
+    this.controls.target.lerp(targetPos, 0.18);
+    this.desiredCam.copy(this.controls.target).add(this.followOffset);
+    this.camera.position.lerp(this.desiredCam, 0.18);
+    this.controls.update();
+},
+
     applyLayout: function(mode) {
         this.currentLayoutMode = mode;
         const targets = new Map(), hostnames = Array.from(this.nodeMap.keys());

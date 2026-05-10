@@ -38,14 +38,17 @@ MESSAGE_TYPES = {
     36: "MPI_TESTANY",
     37: "MPI_TESTALL",
     38: "MPI_TESTSOME",
+    39: "MPI_INIT",
+    40: "MPI_FINALIZE",
 }
 
 MESSAGE_TYPE_ORDER = {name: code for code, name in MESSAGE_TYPES.items()}
 
 SMALL_LABEL_TEXT = "P2P Small Type Messages"
 LARGE_LABEL_TEXT = "P2P Large Type Messages"
-SMALL_LABEL_BYTES = SMALL_LABEL_TEXT.encode("utf-8")
-LARGE_LABEL_BYTES = LARGE_LABEL_TEXT.encode("utf-8")
+
+MPIC_V2_MAGIC = b"MPICv002"
+MPIC_V2_VERSION = 2
 
 BINS = [
     "< 128B",
@@ -71,7 +74,7 @@ COMPLETION_CALLS = {
 }
 
 SYNC_CALLS = {
-    "MPI_BARRIER",
+    "MPI_BARRIER", "MPI_INIT", "MPI_FINALIZE",
 }
 
 ROOTED_COLLECTIVES = {
@@ -82,6 +85,29 @@ GLOBAL_COLLECTIVES = {
     "MPI_ALLREDUCE", "MPI_ALLGATHER",
 }
 
+# -----------------------------------------------------------------------------
+# Binary layouts
+# -----------------------------------------------------------------------------
+#
+# These match the current writer behaviour, including padding where needed.
+# The file format is not portable across arbitrary ABIs, because the writer
+# emits raw C structs.
+#
+
+PROCESS_INFO_FMT = "=iiii1024s"
+PROCESS_INFO_SIZE = struct.calcsize(PROCESS_INFO_FMT)
+
+# int rank; padding 4; double mpi_time_zero; int64_t unix_time_zero_ns;
+PROCESS_TIME_ANCHOR_FMT = "=i4xdq"
+PROCESS_TIME_ANCHOR_SIZE = struct.calcsize(PROCESS_TIME_ANCHOR_FMT)
+
+# double + 8 ints = 40 bytes
+P2P_SMALL_FMT = "=diiiiiiii"
+P2P_SMALL_SIZE = struct.calcsize(P2P_SMALL_FMT)
+
+# double + 13 ints + 4 bytes tail padding = 64 bytes
+P2P_LARGE_FMT = "=diiiiiiiiiiiii4x"
+P2P_LARGE_SIZE = struct.calcsize(P2P_LARGE_FMT)
 
 # -----------------------------------------------------------------------------
 # Basic helpers
@@ -97,19 +123,15 @@ def _make_bins_template():
         "> 16MB": 0,
     }
 
-
 def _cstr(raw_bytes):
     return raw_bytes.split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
-
 
 def _open_maybe_gzip(filepath):
     with open(filepath, "rb") as probe:
         magic = probe.read(2)
-
     if filepath.endswith(".gz") or magic == b"\x1f\x8b":
         return gzip.open(filepath, "rb")
     return open(filepath, "rb")
-
 
 def _read_exact(buffer, offset, size, context):
     end = offset + size
@@ -121,18 +143,15 @@ def _read_exact(buffer, offset, size, context):
         )
     return buffer[offset:end], end
 
-
 def _safe_div(num, den):
     if den == 0:
         return 0.0
     return float(num) / float(den)
 
-
 def _mean(values):
     if not values:
         return 0.0
     return float(sum(values)) / float(len(values))
-
 
 def _pstdev(values):
     if not values:
@@ -140,13 +159,11 @@ def _pstdev(values):
     m = _mean(values)
     return math.sqrt(sum((x - m) * (x - m) for x in values) / float(len(values)))
 
-
 def _cv(values):
     m = _mean(values)
     if m == 0.0:
         return 0.0
     return _pstdev(values) / m
-
 
 def _categorise_small_call(call_name):
     if call_name in COMPLETION_CALLS:
@@ -157,12 +174,10 @@ def _categorise_small_call(call_name):
         return "collective"
     return "point-to-point"
 
-
 def _categorise_large_part(call_name, part_index):
     if call_name == "MPI_SENDRECV":
         return "sendrecv_part_{}".format(part_index)
     return "collective_part_{}".format(part_index)
-
 
 def _bin_for_bytes(num_bytes):
     if num_bytes < 0:
@@ -179,18 +194,15 @@ def _bin_for_bytes(num_bytes):
         return "1MB - 16MB"
     return "> 16MB"
 
-
 def _ensure_stats_entry(stats, call_name):
     if call_name not in stats:
         stats[call_name] = _make_bins_template()
-
 
 def _update_stats(stats, call_name, bytes_vol):
     _ensure_stats_entry(stats, call_name)
     bucket = _bin_for_bytes(bytes_vol)
     if bucket is not None:
         stats[call_name][bucket] += 1
-
 
 def _severity(score):
     if score >= 0.85:
@@ -199,15 +211,10 @@ def _severity(score):
         return "warning"
     return "info"
 
-
 def _top_dict_items(dct, n, reverse=True):
     return sorted(dct.items(), key=lambda kv: kv[1], reverse=reverse)[:n]
 
-
 def print_progress(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='#'):
-    """
-    Call in a loop to create terminal progress bar.
-    """
     if total == 0:
         return
     percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
@@ -215,7 +222,6 @@ def print_progress(iteration, total, prefix='', suffix='', decimals=1, length=50
     bar = fill * filled_length + '-' * (length - filled_length)
     sys.stdout.write('\r{} |{}| {}% {}'.format(prefix, bar, percent, suffix))
     sys.stdout.flush()
-    # Print New Line on Complete
     if iteration == total:
         print()
 
@@ -223,41 +229,47 @@ def print_progress(iteration, total, prefix='', suffix='', decimals=1, length=50
 # Timeline recording helpers
 # -----------------------------------------------------------------------------
 
-def _record_small_event(data, rank_id, time_val, msg_id, mtype, sender, receiver, count, bytes_vol):
+def _record_small_event(data, rank_id, local_time, msg_id, mtype, comm, tag,
+                        sender, receiver, count, bytes_vol):
     call_name = MESSAGE_TYPES.get(mtype, "UNKNOWN_{}".format(mtype))
-
     data["timeline"].append({
-        "time": time_val,
+        "local_time": local_time,
+        "time": local_time,          # overwritten later if anchors are present
+        "epoch_ns": None,            # filled later if anchors are present
         "event_id": msg_id,
         "rank_recording": rank_id,
         "call": call_name,
+        "comm": comm,
+        "tag": tag,
         "sender": sender,
         "receiver": receiver,
         "count": count,
         "bytes": bytes_vol,
         "category": _categorise_small_call(call_name),
     })
-
     _update_stats(data["statistics"], call_name, bytes_vol)
 
-
-def _record_large_event(data, rank_id, time_val, msg_id, mtype, s1, r1, c1, b1, s2, r2, c2, b2):
+def _record_large_event(data, rank_id, local_time, msg_id, mtype, comm,
+                        s1, r1, c1, b1, t1, s2, r2, c2, b2, t2):
     call_name = MESSAGE_TYPES.get(mtype, "UNKNOWN_{}".format(mtype))
     _ensure_stats_entry(data["statistics"], call_name)
 
     parts = [
-        (1, s1, r1, c1, b1),
-        (2, s2, r2, c2, b2),
+        (1, s1, r1, c1, b1, t1),
+        (2, s2, r2, c2, b2, t2),
     ]
 
-    for part_index, sender, receiver, count, bytes_vol in parts:
+    for part_index, sender, receiver, count, bytes_vol, tag in parts:
         is_empty_placeholder = (count <= 0 and bytes_vol <= 0)
-
         data["timeline"].append({
-            "time": time_val,
+            "local_time": local_time,
+            "time": local_time,       # overwritten later if anchors are present
+            "epoch_ns": None,         # filled later if anchors are present
             "event_id": msg_id,
             "rank_recording": rank_id,
             "call": call_name,
+            "comm": comm,
+            "tag": tag,
             "sender": sender,
             "receiver": receiver,
             "count": count,
@@ -266,10 +278,8 @@ def _record_large_event(data, rank_id, time_val, msg_id, mtype, s1, r1, c1, b1, 
             "synthetic_empty": bool(is_empty_placeholder),
         })
 
-        # Keep placeholder parts in the timeline but exclude them from summary stats.
         if not is_empty_placeholder:
             _update_stats(data["statistics"], call_name, bytes_vol)
-
 
 # -----------------------------------------------------------------------------
 # Hardware map
@@ -328,6 +338,200 @@ def load_hardware_map(filepath):
 
     return lookup
 
+# -----------------------------------------------------------------------------
+# Header parsing
+# -----------------------------------------------------------------------------
+
+def _make_topology_entry(rank, pid, core, chip, hostname, hw_lookup, anchor=None):
+    hw_info = hw_lookup.get(hostname, {
+        "x": rank * 15,
+        "y": 0,
+        "z": 0,
+        "cab_id": None,
+        "rack_id": None,
+        "blade_id": None,
+    })
+
+    topo_entry = {
+        "rank": rank,
+        "pid": pid,
+        "core": core,
+        "chip": chip,
+        "hostname": hostname,
+        "x": hw_info.get("x", rank * 15),
+        "y": hw_info.get("y", 0),
+        "z": hw_info.get("z", 0),
+    }
+
+    if "cab_id" in hw_info:
+        topo_entry["cab_id"] = hw_info.get("cab_id")
+    if "rack_id" in hw_info:
+        topo_entry["rack_id"] = hw_info.get("rack_id")
+    if "blade_id" in hw_info:
+        topo_entry["blade_id"] = hw_info.get("blade_id")
+
+    if anchor is not None:
+        topo_entry["mpi_time_zero"] = anchor["mpi_time_zero"]
+        topo_entry["unix_time_zero_ns"] = anchor["unix_time_zero_ns"]
+
+    return topo_entry
+
+def _parse_v2_header(raw_bytes, hw_lookup):
+    offset = 0
+
+    magic, offset = _read_exact(raw_bytes, offset, 8, "v2 magic")
+    if magic != MPIC_V2_MAGIC:
+        raise ValueError("Not a MPICv002 file")
+
+    chunk, offset = _read_exact(raw_bytes, offset, 4, "v2 format version")
+    version = struct.unpack("=I", chunk)[0]
+    if version != MPIC_V2_VERSION:
+        raise ValueError("Unsupported MPIC format version {}".format(version))
+
+    chunk, offset = _read_exact(raw_bytes, offset, 4, "world size")
+    total_ranks = struct.unpack("=i", chunk)[0]
+    if total_ranks < 0:
+        raise ValueError("Invalid world size {}".format(total_ranks))
+
+    chunk, offset = _read_exact(raw_bytes, offset, 64, "date")
+    run_date = _cstr(chunk)
+
+    chunk, offset = _read_exact(raw_bytes, offset, 1024, "program")
+    prog_name = _cstr(chunk)
+
+    processes = []
+    topology = []
+    anchors = [None] * total_ranks
+
+    for idx in range(total_ranks):
+        chunk, offset = _read_exact(raw_bytes, offset, PROCESS_INFO_SIZE, "process info {}".format(idx))
+        rank, pid, core, chip, hostname_b = struct.unpack(PROCESS_INFO_FMT, chunk)
+        hostname = _cstr(hostname_b)
+        processes.append({
+            "rank": rank,
+            "pid": pid,
+            "core": core,
+            "chip": chip,
+            "hostname": hostname,
+        })
+
+    for idx in range(total_ranks):
+        chunk, offset = _read_exact(raw_bytes, offset, PROCESS_TIME_ANCHOR_SIZE, "time anchor {}".format(idx))
+        rank, mpi_time_zero, unix_time_zero_ns = struct.unpack(PROCESS_TIME_ANCHOR_FMT, chunk)
+
+        if 0 <= rank < total_ranks:
+            anchors[rank] = {
+                "rank": rank,
+                "mpi_time_zero": mpi_time_zero,
+                "unix_time_zero_ns": unix_time_zero_ns,
+            }
+        else:
+            # fallback to index if rank is somehow invalid
+            anchors[idx] = {
+                "rank": rank,
+                "mpi_time_zero": mpi_time_zero,
+                "unix_time_zero_ns": unix_time_zero_ns,
+            }
+
+    for proc in processes:
+        rank = proc["rank"]
+        anchor = anchors[rank] if 0 <= rank < total_ranks else None
+        topology.append(_make_topology_entry(
+            proc["rank"], proc["pid"], proc["core"], proc["chip"],
+            proc["hostname"], hw_lookup, anchor
+        ))
+
+    metadata = {
+        "total_ranks": total_ranks,
+        "date": run_date,
+        "program": prog_name if prog_name else "unknown",
+        "system_name": "Unknown Cluster",
+        "file_format": "MPICv002",
+        "file_format_version": version,
+        "time_registration": "per-rank-unix-anchor",
+    }
+
+    return metadata, topology, anchors, offset
+
+def _parse_v1_header(raw_bytes, hw_lookup):
+    offset = 0
+    global_header_fmt = "=i64s1024s"
+    global_header_size = struct.calcsize(global_header_fmt)
+
+    chunk, offset = _read_exact(raw_bytes, offset, global_header_size, "legacy global header")
+    total_ranks, raw_date, raw_prog = struct.unpack(global_header_fmt, chunk)
+
+    if total_ranks < 0:
+        raise ValueError("Invalid legacy world size {}".format(total_ranks))
+
+    run_date = _cstr(raw_date)
+    prog_name = _cstr(raw_prog)
+
+    topology = []
+
+    for idx in range(total_ranks):
+        chunk, offset = _read_exact(raw_bytes, offset, PROCESS_INFO_SIZE, "legacy process info {}".format(idx))
+        rank, pid, core, chip, hostname_b = struct.unpack(PROCESS_INFO_FMT, chunk)
+        hostname = _cstr(hostname_b)
+
+        topology.append(_make_topology_entry(rank, pid, core, chip, hostname, hw_lookup, None))
+
+    metadata = {
+        "total_ranks": total_ranks,
+        "date": run_date,
+        "program": prog_name if prog_name else "unknown",
+        "system_name": "Unknown Cluster",
+        "file_format": "legacy-v1",
+        "file_format_version": 1,
+        "time_registration": "legacy-local-time",
+    }
+
+    anchors = [None] * total_ranks
+    return metadata, topology, anchors, offset
+
+def _parse_mpic_header(raw_bytes, hw_lookup):
+    if len(raw_bytes) >= 8 and raw_bytes[:8] == MPIC_V2_MAGIC:
+        return _parse_v2_header(raw_bytes, hw_lookup)
+    return _parse_v1_header(raw_bytes, hw_lookup)
+
+# -----------------------------------------------------------------------------
+# Time registration
+# -----------------------------------------------------------------------------
+
+def _apply_time_registration(data):
+    anchors = data.get("time_anchors", [])
+    timeline = data["timeline"]
+
+    valid_anchor_epochs = []
+    for anchor in anchors:
+        if anchor is not None and anchor.get("unix_time_zero_ns", 0) > 0:
+            valid_anchor_epochs.append(anchor["unix_time_zero_ns"])
+
+    if not valid_anchor_epochs:
+        for event in timeline:
+            event["time"] = event.get("local_time", event.get("time", 0.0))
+            event["epoch_ns"] = None
+        data["metadata"]["timeline_clock"] = "local-relative"
+        data["metadata"]["timeline_origin"] = "as-recorded"
+        return
+
+    global_origin_ns = min(valid_anchor_epochs)
+
+    for event in timeline:
+        rank = event["rank_recording"]
+        local_time = event.get("local_time", 0.0)
+
+        if 0 <= rank < len(anchors) and anchors[rank] is not None and anchors[rank].get("unix_time_zero_ns", 0) > 0:
+            epoch_ns = anchors[rank]["unix_time_zero_ns"] + int(round(local_time * 1.0e9))
+            event["epoch_ns"] = epoch_ns
+            event["time"] = (epoch_ns - global_origin_ns) / 1.0e9
+        else:
+            event["epoch_ns"] = None
+            event["time"] = local_time
+
+    data["metadata"]["timeline_clock"] = "global-epoch-registered"
+    data["metadata"]["timeline_origin_unix_ns"] = global_origin_ns
+    data["metadata"]["timeline_origin"] = "minimum-rank-anchor"
 
 # -----------------------------------------------------------------------------
 # Human-readable summaries
@@ -343,10 +547,7 @@ def print_summary_table(stats):
         print("=" * 95 + "\n")
         return
 
-    ordered_calls = sorted(
-        stats.keys(),
-        key=lambda name: MESSAGE_TYPE_ORDER.get(name, 9999)
-    )
+    ordered_calls = sorted(stats.keys(), key=lambda name: MESSAGE_TYPE_ORDER.get(name, 9999))
 
     header = " {:<13} | ".format("MPI Call") + " | ".join("{:<10}".format(b) for b in BINS) + " | {:<8}".format("Total")
     print(header)
@@ -356,18 +557,15 @@ def print_summary_table(stats):
         bin_data = stats[call]
         short_call = call.replace("MPI_", "")
         row = " {:<13} | ".format(short_call)
-
         total = 0
         for bucket in BINS:
             count = bin_data.get(bucket, 0)
             total += count
             row += "{:<10} | ".format(count)
-
         row += "{:<8}".format(total)
         print(row)
 
     print("=" * 95 + "\n")
-
 
 def print_analysis_summary(analysis):
     print("\n" + "=" * 95)
@@ -397,15 +595,12 @@ def print_analysis_summary(analysis):
 
     print("=" * 95 + "\n")
 
-
 # -----------------------------------------------------------------------------
-# Parsing backends
+# Section parsing
 # -----------------------------------------------------------------------------
 
-def _parse_sections_strict(raw_data, total_ranks, data, small_fmt, large_fmt):
+def _parse_sections_strict(raw_data, total_ranks, data):
     offset = 0
-    small_size = struct.calcsize(small_fmt)
-    large_size = struct.calcsize(large_fmt)
 
     for section_index in range(total_ranks):
         chunk, offset = _read_exact(raw_data, offset, 4, "rank id")
@@ -413,12 +608,8 @@ def _parse_sections_strict(raw_data, total_ranks, data, small_fmt, large_fmt):
 
         chunk, offset = _read_exact(raw_data, offset, 24, "small section label")
         small_label = _cstr(chunk)
-        if SMALL_LABEL_TEXT not in small_label:
-            raise ValueError(
-                "Bad small-section label for rank {} at section {}: {!r}".format(
-                    rank_id, section_index, small_label
-                )
-            )
+        if small_label != SMALL_LABEL_TEXT:
+            raise ValueError("Bad small-section label for rank {}: {!r}".format(rank_id, small_label))
 
         chunk, offset = _read_exact(raw_data, offset, 4, "small section count")
         num_small = struct.unpack("=i", chunk)[0]
@@ -426,18 +617,14 @@ def _parse_sections_strict(raw_data, total_ranks, data, small_fmt, large_fmt):
             raise ValueError("Negative small record count {} for rank {}".format(num_small, rank_id))
 
         for _ in range(num_small):
-            chunk, offset = _read_exact(raw_data, offset, small_size, "small record")
-            time_val, msg_id, mtype, sender, receiver, count, bytes_vol = struct.unpack(small_fmt, chunk)
-            _record_small_event(data, rank_id, time_val, msg_id, mtype, sender, receiver, count, bytes_vol)
+            chunk, offset = _read_exact(raw_data, offset, P2P_SMALL_SIZE, "small record")
+            unpacked = struct.unpack(P2P_SMALL_FMT, chunk)
+            _record_small_event(data, rank_id, *unpacked)
 
         chunk, offset = _read_exact(raw_data, offset, 24, "large section label")
         large_label = _cstr(chunk)
-        if LARGE_LABEL_TEXT not in large_label:
-            raise ValueError(
-                "Bad large-section label for rank {} at section {}: {!r}".format(
-                    rank_id, section_index, large_label
-                )
-            )
+        if large_label != LARGE_LABEL_TEXT:
+            raise ValueError("Bad large-section label for rank {}: {!r}".format(rank_id, large_label))
 
         chunk, offset = _read_exact(raw_data, offset, 4, "large section count")
         num_large = struct.unpack("=i", chunk)[0]
@@ -445,86 +632,114 @@ def _parse_sections_strict(raw_data, total_ranks, data, small_fmt, large_fmt):
             raise ValueError("Negative large record count {} for rank {}".format(num_large, rank_id))
 
         for _ in range(num_large):
-            chunk, offset = _read_exact(raw_data, offset, large_size, "large record")
-            unpacked = struct.unpack(large_fmt, chunk)
+            chunk, offset = _read_exact(raw_data, offset, P2P_LARGE_SIZE, "large record")
+            unpacked = struct.unpack(P2P_LARGE_FMT, chunk)
             _record_large_event(data, rank_id, *unpacked)
 
         print_progress(section_index + 1, total_ranks, prefix='Parsing Ranks:', suffix='Complete', length=40)
 
-    trailing = raw_data[offset:]
-    if trailing not in (b"",):
-        raise ValueError("Strict parse finished with {} unexpected trailing bytes".format(len(trailing)))
+    # Allow trailing zero padding only
+    if offset < len(raw_data):
+        trailing = raw_data[offset:]
+        if any(b != 0 for b in trailing):
+            raise ValueError("Unexpected non-zero trailing bytes after strict parse")
 
-
-def _parse_sections_salvage(raw_data, total_len, data, small_fmt, large_fmt):
+def _parse_sections_salvage(raw_data, total_len, data):
     offset = 0
-    small_size = struct.calcsize(small_fmt)
-    large_size = struct.calcsize(large_fmt)
+    parsed_sections = 0
+    seen_ranks = set()
 
-    while offset < total_len:
-        if offset + 4 > total_len:
+    print("Running salvage parser...")
+
+    while offset + 32 <= total_len:
+        rank_bytes = raw_data[offset:offset + 4]
+        label_bytes = raw_data[offset + 4:offset + 28]
+
+        if len(rank_bytes) < 4 or len(label_bytes) < 24:
             break
 
-        rank_id = struct.unpack("=i", raw_data[offset:offset + 4])[0]
-        offset += 4
+        rank_id = struct.unpack("=i", rank_bytes)[0]
+        small_label = _cstr(label_bytes)
 
-        if offset + 24 > total_len:
-            break
-        small_str = raw_data[offset:offset + 24]
-        offset += 24
-
-        if SMALL_LABEL_BYTES not in small_str:
-            next_idx = raw_data.find(SMALL_LABEL_BYTES, offset)
-            if next_idx == -1:
-                break
-            offset = max(0, next_idx - 4)
+        if small_label != SMALL_LABEL_TEXT:
+            offset += 1
             continue
 
-        if offset + 4 > total_len:
-            break
-        offset += 4
+        try:
+            num_small = struct.unpack("=i", raw_data[offset + 28:offset + 32])[0]
+        except struct.error:
+            offset += 1
+            continue
 
-        next_large_idx = raw_data.find(LARGE_LABEL_BYTES, offset)
-        if next_large_idx == -1:
-            small_bytes_len = total_len - offset
-            next_large_idx = total_len
-        else:
-            small_bytes_len = next_large_idx - offset
+        if num_small < 0:
+            offset += 1
+            continue
 
-        valid_small_len = small_bytes_len - (small_bytes_len % small_size)
-        small_buffer = raw_data[offset:offset + valid_small_len]
+        small_bytes_end = offset + 32 + num_small * P2P_SMALL_SIZE
+        if small_bytes_end + 28 > total_len:
+            offset += 1
+            continue
 
-        for unpacked in struct.iter_unpack(small_fmt, small_buffer):
+        large_label = _cstr(raw_data[small_bytes_end:small_bytes_end + 24])
+        if large_label != LARGE_LABEL_TEXT:
+            offset += 1
+            continue
+
+        try:
+            num_large = struct.unpack("=i", raw_data[small_bytes_end + 24:small_bytes_end + 28])[0]
+        except struct.error:
+            offset += 1
+            continue
+
+        if num_large < 0:
+            offset += 1
+            continue
+
+        section_end = small_bytes_end + 28 + num_large * P2P_LARGE_SIZE
+        if section_end > total_len:
+            offset += 1
+            continue
+
+        # Avoid duplicate salvage of the same rank section
+        if rank_id in seen_ranks:
+            offset += 1
+            continue
+
+        # Parse the section
+        local_offset = offset + 32
+
+        for _ in range(num_small):
+            chunk = raw_data[local_offset:local_offset + P2P_SMALL_SIZE]
+            unpacked = struct.unpack(P2P_SMALL_FMT, chunk)
             _record_small_event(data, rank_id, *unpacked)
+            local_offset += P2P_SMALL_SIZE
 
-        offset = next_large_idx
+        local_offset += 24  # large label
+        local_offset += 4   # large count
 
-        if offset + 24 > total_len:
-            break
-        offset += 24
+        large_start = small_bytes_end + 28
+        local_offset = large_start
 
-        if offset + 4 > total_len:
-            break
-        offset += 4
-
-        data_start_large = offset
-        next_small_idx = raw_data.find(SMALL_LABEL_BYTES, offset)
-
-        if next_small_idx == -1:
-            large_bytes_len = total_len - data_start_large
-            next_rank_offset = total_len
-        else:
-            next_rank_offset = max(0, next_small_idx - 4)
-            large_bytes_len = next_rank_offset - data_start_large
-
-        valid_large_len = large_bytes_len - (large_bytes_len % large_size)
-        large_buffer = raw_data[data_start_large:data_start_large + valid_large_len]
-
-        for unpacked in struct.iter_unpack(large_fmt, large_buffer):
+        for _ in range(num_large):
+            chunk = raw_data[local_offset:local_offset + P2P_LARGE_SIZE]
+            unpacked = struct.unpack(P2P_LARGE_FMT, chunk)
             _record_large_event(data, rank_id, *unpacked)
+            local_offset += P2P_LARGE_SIZE
 
-        offset = next_rank_offset
+        seen_ranks.add(rank_id)
+        parsed_sections += 1
+        offset = section_end
+        print_progress(offset, total_len, prefix='Salvaging:   ', suffix='Complete', length=40)
 
+    print_progress(total_len, total_len, prefix='Salvaging:   ', suffix='Complete', length=40)
+
+    if parsed_sections == 0:
+        raise ValueError("Salvage parser found no valid rank sections")
+
+    if parsed_sections < data["metadata"].get("total_ranks", 0):
+        print("Warning: salvage parser recovered {} / {} rank sections".format(
+            parsed_sections, data["metadata"].get("total_ranks", 0)
+        ), file=sys.stderr)
 
 # -----------------------------------------------------------------------------
 # Analysis helpers
@@ -533,21 +748,7 @@ def _parse_sections_salvage(raw_data, total_len, data, small_fmt, large_fmt):
 def _is_real_payload_event(event):
     return (event.get("bytes", 0) > 0) and (not event.get("synthetic_empty", False))
 
-
 def _is_canonical_transfer_event(event):
-    """
-    Select a canonical subset of events that is useful for pair/link analysis
-    without double-counting the common send+recv case.
-
-    Rules:
-      - send-like point-to-point calls count
-      - SENDRECV part_1 counts
-      - BCAST / REDUCE count as directional rooted traffic
-      - GATHER part_1 counts
-      - SCATTER part_2 counts
-      - ALLREDUCE / ALLGATHER are analysed separately, not as pair links
-      - receive-side point-to-point records are ignored for pair aggregation
-    """
     if not _is_real_payload_event(event):
         return False
 
@@ -556,24 +757,17 @@ def _is_canonical_transfer_event(event):
 
     if call in SEND_LIKE_CALLS:
         return True
-
     if call == "MPI_SENDRECV" and category == "sendrecv_part_1":
         return True
-
     if call == "MPI_BCAST" and event["sender"] != event["receiver"]:
         return True
-
     if call == "MPI_REDUCE" and event["sender"] != event["receiver"]:
         return True
-
     if call == "MPI_GATHER" and category == "collective_part_1" and event["sender"] != event["receiver"]:
         return True
-
     if call == "MPI_SCATTER" and category == "collective_part_2" and event["sender"] != event["receiver"]:
         return True
-
     return False
-
 
 def _guess_root_for_rooted_collective(event):
     call = event["call"]
@@ -583,7 +777,6 @@ def _guess_root_for_rooted_collective(event):
         return event["receiver"]
     return None
 
-
 def _build_time_windows(timeline, window_count):
     if not timeline:
         return []
@@ -592,70 +785,43 @@ def _build_time_windows(timeline, window_count):
     end_t = timeline[-1]["time"]
     runtime = end_t - start_t
 
-    if runtime <= 0.0 or window_count <= 1:
-        return [{
-            "t_start": start_t,
-            "t_end": end_t,
-            "events": len(timeline),
-            "canonical_transfer_events": sum(1 for e in timeline if _is_canonical_transfer_event(e)),
-            "canonical_transfer_bytes": sum(e.get("bytes", 0) for e in timeline if _is_canonical_transfer_event(e)),
-            "completion_events": sum(1 for e in timeline if e["call"] in COMPLETION_CALLS),
-            "barrier_events": sum(1 for e in timeline if e["call"] == "MPI_BARRIER"),
-            "collective_events": sum(1 for e in timeline if e["call"] in ROOTED_COLLECTIVES or e["call"] in GLOBAL_COLLECTIVES),
-        }]
-
-    windows = []
-    for i in range(window_count):
-        t0 = start_t + (runtime * i) / float(window_count)
-        t1 = start_t + (runtime * (i + 1)) / float(window_count)
-        windows.append({
-            "t_start": t0,
-            "t_end": t1,
-            "events": 0,
-            "canonical_transfer_events": 0,
-            "canonical_transfer_bytes": 0,
-            "completion_events": 0,
-            "barrier_events": 0,
-            "collective_events": 0,
-        })
+    windows = [{
+        "t_start": start_t + (runtime * i) / float(window_count),
+        "t_end": start_t + (runtime * (i + 1)) / float(window_count),
+        "events": 0,
+        "canonical_transfer_events": 0,
+        "canonical_transfer_bytes": 0,
+        "completion_events": 0,
+        "barrier_events": 0,
+        "collective_events": 0
+    } for i in range(window_count)]
 
     for event in timeline:
-        idx = int(((event["time"] - start_t) / runtime) * window_count)
-        if idx >= window_count:
-            idx = window_count - 1
-        if idx < 0:
+        if runtime <= 0.0:
             idx = 0
+        else:
+            idx = min(window_count - 1, max(0, int(((event["time"] - start_t) / runtime) * window_count)))
 
         win = windows[idx]
         win["events"] += 1
-
         if _is_canonical_transfer_event(event):
             win["canonical_transfer_events"] += 1
             win["canonical_transfer_bytes"] += event.get("bytes", 0)
-
         if event["call"] in COMPLETION_CALLS:
             win["completion_events"] += 1
-
         if event["call"] == "MPI_BARRIER":
             win["barrier_events"] += 1
-
         if event["call"] in ROOTED_COLLECTIVES or event["call"] in GLOBAL_COLLECTIVES:
             win["collective_events"] += 1
 
     return windows
 
-
 def analyse_trace(data):
-    """
-    Build analysis structures intended for visualisation and lightweight
-    performance diagnosis.
-    """
     timeline = data["timeline"]
     total_ranks = data["metadata"].get("total_ranks", 0)
 
-    per_rank = {}
-    for r in range(total_ranks):
-        per_rank[r] = {
+    per_rank = {
+        r: {
             "rank": r,
             "events": 0,
             "completion_events": 0,
@@ -670,7 +836,8 @@ def analyse_trace(data):
             "distinct_out_peers": set(),
             "distinct_in_peers": set(),
             "completion_request_count": 0,
-        }
+        } for r in range(total_ranks)
+    }
 
     pair_stats = defaultdict(lambda: {
         "messages": 0,
@@ -678,6 +845,9 @@ def analyse_trace(data):
         "calls": Counter(),
         "first_time": None,
         "last_time": None,
+        "comm": None,
+        "sender": None,
+        "receiver": None,
     })
 
     rooted_collective_roots = defaultdict(lambda: {
@@ -700,39 +870,27 @@ def analyse_trace(data):
     small1k_by_call = Counter()
 
     sorted_timeline = timeline
-    if sorted_timeline:
-        start_t = sorted_timeline[0]["time"]
-        end_t = sorted_timeline[-1]["time"]
-        runtime = max(0.0, end_t - start_t)
-    else:
-        start_t = 0.0
-        end_t = 0.0
-        runtime = 0.0
-
+    start_t = sorted_timeline[0]["time"] if sorted_timeline else 0.0
+    end_t = sorted_timeline[-1]["time"] if sorted_timeline else 0.0
+    runtime = max(0.0, end_t - start_t)
     total_events = len(sorted_timeline)
 
-    # ---------------------------------------------------------
-    # Pass 1: basic counts over all recorded events.
-    # ---------------------------------------------------------
+    # =========================================================================
+    # Pass 1: Basic Counts
+    # =========================================================================
     print("\nAnalyzing Trace - Pass 1 (Basic Counts)...")
-    print_progress(0, total_events, prefix='Pass 1: ', suffix='Complete', length=40, fill='#')
-    
     for idx, event in enumerate(sorted_timeline):
         rr = event["rank_recording"]
         call = event["call"]
-        count = event.get("count", 0)
 
         if rr in per_rank:
             per_rank[rr]["events"] += 1
-
             if call in COMPLETION_CALLS:
                 per_rank[rr]["completion_events"] += 1
-                per_rank[rr]["completion_request_count"] += max(0, count)
-
+                per_rank[rr]["completion_request_count"] += max(0, event.get("count", 0))
             if call == "MPI_BARRIER":
                 per_rank[rr]["barrier_events"] += 1
                 barrier_times[rr].append(event["time"])
-
             if call in ROOTED_COLLECTIVES or call in GLOBAL_COLLECTIVES:
                 per_rank[rr]["collective_events"] += 1
                 if call in ROOTED_COLLECTIVES:
@@ -742,30 +900,21 @@ def analyse_trace(data):
 
         if call in COMPLETION_CALLS:
             completion_total_events += 1
-
         if call == "MPI_BARRIER":
             barrier_total_events += 1
-
         if call in ROOTED_COLLECTIVES or call in GLOBAL_COLLECTIVES:
             collective_total_events += 1
-
         if call in GLOBAL_COLLECTIVES:
             global_collective_total_events += 1
 
-        # Throttle progress bar updates to save I/O time
         if idx % 10000 == 0:
             print_progress(idx, total_events, prefix='Pass 1: ', suffix='Complete', length=40, fill='#')
-            
-    # Ensure it hits 100% at the end
     print_progress(total_events, total_events, prefix='Pass 1: ', suffix='Complete', length=40, fill='#')
 
-
-    # ---------------------------------------------------------
-    # Pass 2: canonical pair/link traffic.
-    # ---------------------------------------------------------
+    # =========================================================================
+    # Pass 2: Canonical Pair/Link Traffic
+    # =========================================================================
     print("Analyzing Trace - Pass 2 (Canonical Traffic)...")
-    print_progress(0, total_events, prefix='Pass 2: ', suffix='Complete', length=40, fill='#')
-    
     for idx, event in enumerate(sorted_timeline):
         if not _is_canonical_transfer_event(event):
             continue
@@ -775,6 +924,7 @@ def analyse_trace(data):
         receiver = event["receiver"]
         num_bytes = event.get("bytes", 0)
         t = event.get("time", 0.0)
+        comm = event.get("comm", 0)
 
         canonical_total_events += 1
         canonical_total_bytes += num_bytes
@@ -789,10 +939,14 @@ def analyse_trace(data):
             per_rank[receiver]["canonical_messages_in"] += 1
             per_rank[receiver]["distinct_in_peers"].add(sender)
 
-        pair_key = (sender, receiver)
+        pair_key = (comm, sender, receiver)
         pair_stats[pair_key]["messages"] += 1
         pair_stats[pair_key]["bytes"] += num_bytes
         pair_stats[pair_key]["calls"][call] += 1
+        pair_stats[pair_key]["comm"] = comm
+        pair_stats[pair_key]["sender"] = sender
+        pair_stats[pair_key]["receiver"] = receiver
+
         if pair_stats[pair_key]["first_time"] is None or t < pair_stats[pair_key]["first_time"]:
             pair_stats[pair_key]["first_time"] = t
         if pair_stats[pair_key]["last_time"] is None or t > pair_stats[pair_key]["last_time"]:
@@ -811,16 +965,108 @@ def analyse_trace(data):
                 rooted_collective_roots[root]["bytes"] += num_bytes
                 rooted_collective_roots[root]["calls"][call] += 1
 
-        # Throttle progress bar updates to save I/O time
         if idx % 10000 == 0:
             print_progress(idx, total_events, prefix='Pass 2: ', suffix='Complete', length=40, fill='#')
-            
-    # Ensure it hits 100% at the end
     print_progress(total_events, total_events, prefix='Pass 2: ', suffix='Complete', length=40, fill='#')
 
+    # =========================================================================
+    # Pass 3: Timing Heuristics
+    # =========================================================================
+    print("Analyzing Trace - Pass 3 (Timing Heuristics)...")
 
-    print("Finalising rank sets...")
-    # Finalise per-rank sets into counts / serialisable data.
+    p2p_sends = defaultdict(list)
+    p2p_recvs = defaultdict(list)
+
+    rank_bcast_seq = Counter()
+    bcast_seq_map = defaultdict(list)
+
+    rank_reduce_seq = Counter()
+    reduce_seq_map = defaultdict(list)
+
+    for idx, event in enumerate(sorted_timeline):
+        call = event["call"]
+        t = event["time"]
+        comm = event.get("comm", 0)
+        tag = event.get("tag", 0)
+
+        # P2P pairing
+        if call in SEND_LIKE_CALLS:
+            p2p_sends[(comm, event["sender"], event["receiver"], tag)].append(t)
+        elif call in RECV_LIKE_CALLS:
+            p2p_recvs[(comm, event["sender"], event["receiver"], tag)].append(t)
+        elif call == "MPI_SENDRECV":
+            if event.get("category") == "sendrecv_part_1":
+                p2p_sends[(comm, event["sender"], event["receiver"], tag)].append(t)
+            elif event.get("category") == "sendrecv_part_2":
+                p2p_recvs[(comm, event["sender"], event["receiver"], tag)].append(t)
+
+        # Collective pairing
+        elif call == "MPI_BCAST":
+            root = event["sender"]
+            local = event["receiver"]
+            seq_key = (comm, local)
+            seq = rank_bcast_seq[seq_key]
+            bcast_seq_map[(comm, root, seq)].append((local, t))
+            rank_bcast_seq[seq_key] += 1
+
+        elif call == "MPI_REDUCE":
+            root = event["receiver"]
+            local = event["sender"]
+            seq_key = (comm, local)
+            seq = rank_reduce_seq[seq_key]
+            reduce_seq_map[(comm, root, seq)].append((local, t))
+            rank_reduce_seq[seq_key] += 1
+
+        if idx % 10000 == 0:
+            print_progress(idx, total_events, prefix='Pass 3: ', suffix='Complete', length=40, fill='#')
+    print_progress(total_events, total_events, prefix='Pass 3: ', suffix='Complete', length=40, fill='#')
+
+    TIMING_THRESHOLD = 0.001  # 1ms
+
+    late_sender_count = 0
+    late_sender_time = 0.0
+    late_receiver_count = 0
+    late_receiver_time = 0.0
+
+    for pair, s_times in p2p_sends.items():
+        r_times = p2p_recvs.get(pair, [])
+        for ts, tr in zip(s_times, r_times):
+            diff = tr - ts
+            if diff < -TIMING_THRESHOLD:
+                late_sender_count += 1
+                late_sender_time += (-diff)
+            elif diff > TIMING_THRESHOLD:
+                late_receiver_count += 1
+                late_receiver_time += diff
+
+    late_broadcaster_count = 0
+    late_broadcaster_time = 0.0
+    for (_comm, root, seq), events in bcast_seq_map.items():
+        root_time = next((t for r, t in events if r == root), None)
+        if root_time is not None:
+            for r, t in events:
+                if r != root:
+                    diff = t - root_time
+                    if diff < -TIMING_THRESHOLD:
+                        late_broadcaster_count += 1
+                        late_broadcaster_time += (-diff)
+
+    early_reduce_count = 0
+    early_reduce_time = 0.0
+    for (_comm, root, seq), events in reduce_seq_map.items():
+        root_time = next((t for r, t in events if r == root), None)
+        if root_time is not None:
+            for r, t in events:
+                if r != root:
+                    diff = t - root_time
+                    if diff < -TIMING_THRESHOLD:
+                        early_reduce_count += 1
+                        early_reduce_time += (-diff)
+
+    # =========================================================================
+    # Aggregation
+    # =========================================================================
+
     per_rank_list = []
     total_touch_bytes = []
     out_peer_counts = []
@@ -836,14 +1082,12 @@ def analyse_trace(data):
         out_peer_counts.append(entry["distinct_out_peers"])
         in_peer_counts.append(entry["distinct_in_peers"])
 
-    print("Calculatng top links...")
-
-    # Top links.
     top_links = []
-    for (sender, receiver), stats in sorted(pair_stats.items(), key=lambda kv: kv[1]["bytes"], reverse=True)[:20]:
+    for (_comm, _sender, _receiver), stats in sorted(pair_stats.items(), key=lambda kv: kv[1]["bytes"], reverse=True)[:20]:
         top_links.append({
-            "sender": sender,
-            "receiver": receiver,
+            "comm": stats["comm"],
+            "sender": stats["sender"],
+            "receiver": stats["receiver"],
             "messages": stats["messages"],
             "bytes": stats["bytes"],
             "calls": dict(sorted(stats["calls"].items())),
@@ -851,25 +1095,23 @@ def analyse_trace(data):
             "last_time": stats["last_time"],
         })
 
-    print("Calculating top ranks...")
+    top_ranks_by_out = [{
+        "rank": r["rank"],
+        "bytes": r["canonical_bytes_out"],
+        "messages": r["canonical_messages_out"]
+    } for r in sorted(per_rank_list, key=lambda x: x["canonical_bytes_out"], reverse=True)[:10]]
 
-    # Top ranks.
-    top_ranks_by_out = [
-        {"rank": r["rank"], "bytes": r["canonical_bytes_out"], "messages": r["canonical_messages_out"]}
-        for r in sorted(per_rank_list, key=lambda x: x["canonical_bytes_out"], reverse=True)[:10]
-    ]
-    top_ranks_by_in = [
-        {"rank": r["rank"], "bytes": r["canonical_bytes_in"], "messages": r["canonical_messages_in"]}
-        for r in sorted(per_rank_list, key=lambda x: x["canonical_bytes_in"], reverse=True)[:10]
-    ]
-    top_ranks_by_touch = [
-        {"rank": r["rank"], "bytes": r["touch_bytes"]}
-        for r in sorted(per_rank_list, key=lambda x: x["touch_bytes"], reverse=True)[:10]
-    ]
+    top_ranks_by_in = [{
+        "rank": r["rank"],
+        "bytes": r["canonical_bytes_in"],
+        "messages": r["canonical_messages_in"]
+    } for r in sorted(per_rank_list, key=lambda x: x["canonical_bytes_in"], reverse=True)[:10]]
 
-    print("Analysing collectives...")
+    top_ranks_by_touch = [{
+        "rank": r["rank"],
+        "bytes": r["touch_bytes"]
+    } for r in sorted(per_rank_list, key=lambda x: x["touch_bytes"], reverse=True)[:10]]
 
-    # Rooted collective roots.
     rooted_collective_summary = []
     for root, stats in sorted(rooted_collective_roots.items(), key=lambda kv: kv[1]["bytes"], reverse=True):
         rooted_collective_summary.append({
@@ -879,21 +1121,17 @@ def analyse_trace(data):
             "calls": dict(sorted(stats["calls"].items())),
         })
 
-    print("Analysing barriers...")
-    # Barrier skew analysis.
     barrier_spreads = []
     if total_ranks > 0:
         barrier_counts = [len(barrier_times[r]) for r in range(total_ranks)]
         common_barriers = min(barrier_counts) if barrier_counts else 0
-
         for idx in range(common_barriers):
             times = [barrier_times[r][idx] for r in range(total_ranks)]
-            spread = max(times) - min(times)
             barrier_spreads.append({
                 "barrier_index": idx,
                 "t_min": min(times),
                 "t_max": max(times),
-                "spread": spread,
+                "spread": max(times) - min(times),
             })
     else:
         common_barriers = 0
@@ -901,309 +1139,271 @@ def analyse_trace(data):
     max_barrier_spread = max((b["spread"] for b in barrier_spreads), default=0.0)
     avg_barrier_spread = _mean([b["spread"] for b in barrier_spreads]) if barrier_spreads else 0.0
 
-    print("Looking for patterns")
-
-    # Patterns.
-    patterns = []
-
     avg_out_peers = _mean(out_peer_counts)
     avg_in_peers = _mean(in_peer_counts)
     pair_density = _safe_div(len(pair_stats), total_ranks * max(0, total_ranks - 1))
+    touch_cv = _cv(total_touch_bytes)
+    top_link_share = _safe_div(top_links[0]["bytes"], canonical_total_bytes) if top_links and canonical_total_bytes > 0 else 0.0
 
-    # Pattern: star/master-worker
-    if per_rank_list and canonical_total_bytes > 0:
-        top_touch_rank = max(per_rank_list, key=lambda x: x["touch_bytes"])
-        top_touch_fraction = _safe_div(top_touch_rank["touch_bytes"], 2 * canonical_total_bytes)
-        top_degree = max(top_touch_rank["distinct_out_peers"], top_touch_rank["distinct_in_peers"])
+    small128_total = sum(small128_by_call.values())
+    small1k_total = sum(small1k_by_call.values())
+    small1k_ratio = _safe_div(small1k_total, canonical_total_events)
 
-        if total_ranks > 2 and top_touch_fraction >= 0.35 and top_degree >= max(2, int(0.5 * (total_ranks - 1))):
-            patterns.append({
-                "type": "master_worker",
-                "strength": top_touch_fraction,
-                "ranks": [top_touch_rank["rank"]],
-                "description": "Rank {} is communication-central, touching {:.1%} of observed canonical traffic.".format(
-                    top_touch_rank["rank"], top_touch_fraction
-                ),
-                "metrics": {
-                    "touch_fraction": top_touch_fraction,
-                    "degree": top_degree,
-                },
-            })
+    rooted_total_bytes = sum(r["bytes"] for r in rooted_collective_summary)
+    top_root_share = _safe_div(rooted_collective_summary[0]["bytes"], rooted_total_bytes) if rooted_collective_summary and rooted_total_bytes > 0 else 0.0
 
-    # Pattern: rooted collectives concentrated on one root.
-    if rooted_collective_summary:
-        total_rooted_bytes = sum(x["bytes"] for x in rooted_collective_summary)
-        top_root = rooted_collective_summary[0]
-        top_root_frac = _safe_div(top_root["bytes"], total_rooted_bytes)
+    completion_to_transfer_ratio = _safe_div(completion_total_events, canonical_total_events)
 
-        if top_root_frac >= 0.5 and top_root["events"] > 0:
-            patterns.append({
-                "type": "rooted_collectives",
-                "strength": top_root_frac,
-                "ranks": [top_root["root"]],
-                "description": "Rooted collective traffic is concentrated on rank {}, which handles {:.1%} of rooted collective bytes.".format(
-                    top_root["root"], top_root_frac
-                ),
-                "metrics": {
-                    "root": top_root["root"],
-                    "rooted_collective_fraction": top_root_frac,
-                    "rooted_collective_bytes": top_root["bytes"],
-                    "rooted_collective_events": top_root["events"],
-                },
-            })
+    # =========================================================================
+    # Patterns
+    # =========================================================================
 
-    # Pattern: ring / nearest-neighbour
-    if total_ranks > 2 and pair_stats:
-        offset_counter = Counter()
-        reciprocal_pair_count = 0
-        seen_pairs = set()
+    patterns = []
 
-        for (s, r), stats in pair_stats.items():
-            if s == r:
-                continue
-            offset = (r - s) % total_ranks
-            canonical_offset = min(offset, total_ranks - offset) if total_ranks > 0 else offset
-            offset_counter[canonical_offset] += stats["messages"]
-
-            if (r, s) in pair_stats and ((r, s), (s, r)) not in seen_pairs:
-                reciprocal_pair_count += 1
-                seen_pairs.add(((s, r), (r, s)))
-                seen_pairs.add(((r, s), (s, r)))
-
-        total_offset_msgs = sum(offset_counter.values())
-        one_hop_frac = _safe_div(offset_counter.get(1, 0), total_offset_msgs)
-        top_offsets = offset_counter.most_common(4)
-        top_offsets_frac = _safe_div(sum(v for _, v in top_offsets), total_offset_msgs)
-        reciprocal_pair_frac = _safe_div(reciprocal_pair_count, max(1, len(pair_stats)))
-
-        if avg_out_peers <= 2.5 and one_hop_frac >= 0.5:
-            patterns.append({
-                "type": "ring_nearest_neighbor",
-                "strength": one_hop_frac,
-                "description": "Communication is dominated by nearest-neighbour rank offsets (1-hop fraction {:.1%}).".format(
-                    one_hop_frac
-                ),
-                "metrics": {
-                    "one_hop_fraction": one_hop_frac,
-                    "avg_out_peers": avg_out_peers,
-                    "reciprocal_pair_fraction": reciprocal_pair_frac,
-                },
-            })
-        elif avg_out_peers <= 6.0 and top_offsets_frac >= 0.75 and reciprocal_pair_frac >= 0.2:
-            patterns.append({
-                "type": "neighborhood_exchange",
-                "strength": top_offsets_frac,
-                "description": "Communication is concentrated on a small set of rank offsets, consistent with a neighbourhood/halo exchange.".format(),
-                "metrics": {
-                    "top_offset_fraction": top_offsets_frac,
-                    "avg_out_peers": avg_out_peers,
-                    "reciprocal_pair_fraction": reciprocal_pair_frac,
-                },
-            })
-
-    # Pattern: all-to-all-ish
-    if total_ranks > 2 and avg_out_peers >= 0.6 * (total_ranks - 1) and pair_density >= 0.5:
+    if pair_density >= 0.5 and total_ranks >= 8:
         patterns.append({
-            "type": "all_to_all_like",
-            "strength": min(1.0, max(pair_density, _safe_div(avg_out_peers, total_ranks - 1))),
-            "description": "The pair graph is dense, suggesting an all-to-all-like communication pattern.",
+            "type": "dense-communication",
+            "description": "Communication graph is dense (pair density {:.3f}), suggesting all-to-all or highly connected traffic.".format(pair_density),
             "metrics": {
                 "pair_density": pair_density,
-                "avg_out_peers": avg_out_peers,
-                "avg_in_peers": avg_in_peers,
-            },
+                "pairs_observed": len(pair_stats),
+            }
         })
-
-    # Pattern: ping-pong pairs
-    ping_pong_candidates = []
-    for (s, r), stats_sr in pair_stats.items():
-        if s >= r:
-            continue
-        stats_rs = pair_stats.get((r, s))
-        if not stats_rs:
-            continue
-
-        total_msgs = stats_sr["messages"] + stats_rs["messages"]
-        if total_msgs < 6:
-            continue
-
-        balance = 1.0 - _safe_div(abs(stats_sr["bytes"] - stats_rs["bytes"]), max(stats_sr["bytes"], stats_rs["bytes"], 1))
-        if balance >= 0.75:
-            ping_pong_candidates.append({
-                "ranks": [s, r],
-                "messages": total_msgs,
-                "bytes_total": stats_sr["bytes"] + stats_rs["bytes"],
-                "balance": balance,
-            })
-
-    ping_pong_candidates.sort(key=lambda x: (x["bytes_total"], x["messages"]), reverse=True)
-    if ping_pong_candidates:
+    elif pair_density > 0.0 and pair_density <= 0.1 and total_ranks >= 8:
         patterns.append({
-            "type": "ping_pong",
-            "strength": ping_pong_candidates[0]["balance"],
-            "description": "Detected balanced two-way traffic between a small number of rank pairs.",
-            "pairs": ping_pong_candidates[:5],
+            "type": "sparse-communication",
+            "description": "Communication graph is sparse (pair density {:.3f}), suggesting nearest-neighbour or structured exchange.".format(pair_density),
             "metrics": {
-                "pair_count": len(ping_pong_candidates),
-            },
+                "pair_density": pair_density,
+                "pairs_observed": len(pair_stats),
+            }
         })
 
-    # Issues / heuristic findings.
+    if small1k_ratio >= 0.5 and canonical_total_events > 0:
+        patterns.append({
+            "type": "small-message-dominated",
+            "description": "A large fraction of canonical transfers are under 1KB ({:.1%}).".format(small1k_ratio),
+            "metrics": {
+                "small_lt_1kb_ratio": small1k_ratio,
+                "small_lt_1kb_events": small1k_total,
+            }
+        })
+
+    if rooted_collective_summary and top_root_share >= 0.5:
+        patterns.append({
+            "type": "root-concentrated-collectives",
+            "description": "One rank dominates rooted collective traffic ({:.1%} of rooted collective bytes).".format(top_root_share),
+            "metrics": {
+                "top_root": rooted_collective_summary[0]["root"],
+                "top_root_share": top_root_share,
+            }
+        })
+
+    if top_link_share >= 0.2 and canonical_total_bytes > 0:
+        patterns.append({
+            "type": "dominant-link",
+            "description": "A single communication link carries {:.1%} of canonical traffic bytes.".format(top_link_share),
+            "metrics": {
+                "top_link_share": top_link_share,
+                "top_link": top_links[0] if top_links else None,
+            }
+        })
+
+    if touch_cv >= 1.0 and total_ranks > 1:
+        patterns.append({
+            "type": "rank-communication-imbalance",
+            "description": "Communication volume per rank is imbalanced (CV {:.3f}).".format(touch_cv),
+            "metrics": {
+                "touch_bytes_cv": touch_cv,
+            }
+        })
+
+    if completion_to_transfer_ratio >= 0.5:
+        patterns.append({
+            "type": "completion-heavy",
+            "description": "Completion calls are frequent relative to canonical transfers (ratio {:.3f}).".format(completion_to_transfer_ratio),
+            "metrics": {
+                "completion_to_transfer_ratio": completion_to_transfer_ratio,
+            }
+        })
+
+    if barrier_total_events > 0 and _safe_div(barrier_total_events, total_events) >= 0.05:
+        patterns.append({
+            "type": "barrier-heavy",
+            "description": "Barrier usage is prominent in the trace ({} barrier events).".format(barrier_total_events),
+            "metrics": {
+                "barrier_events": barrier_total_events,
+                "barrier_fraction": _safe_div(barrier_total_events, total_events),
+            }
+        })
+
+    # =========================================================================
+    # Issues
+    # =========================================================================
+
     issues = []
 
-    # Issue: small-message dominated traffic
-    small128_total = sum(1 for e in sorted_timeline if _is_canonical_transfer_event(e) and e.get("bytes", 0) < 128)
-    small1k_total = sum(1 for e in sorted_timeline if _is_canonical_transfer_event(e) and e.get("bytes", 0) < 1024)
-    small128_frac = _safe_div(small128_total, canonical_total_events)
-    small1k_frac = _safe_div(small1k_total, canonical_total_events)
-
-    if canonical_total_events >= 50 and (small128_frac >= 0.5 or small1k_frac >= 0.8):
-        score = max(small128_frac, 0.8 * small1k_frac)
-        issues.append({
-            "type": "small_message_overhead",
-            "severity": _severity(score),
-            "score": score,
-            "description": "A large fraction of canonical transfers are very small, which may indicate latency-dominated communication.",
-            "metrics": {
-                "small_under_128B_fraction": small128_frac,
-                "small_under_1KB_fraction": small1k_frac,
-                "canonical_transfer_events": canonical_total_events,
-                "top_small_message_calls_under_128B": dict(_top_dict_items(small128_by_call, 8)),
-                "top_small_message_calls_under_1KB": dict(_top_dict_items(small1k_by_call, 8)),
-            },
-        })
-
-    # Issue: rank communication imbalance
-    if total_touch_bytes:
-        max_touch = max(total_touch_bytes)
-        mean_touch = _mean(total_touch_bytes)
-        cv_touch = _cv(total_touch_bytes)
-        score = max(_safe_div(max_touch, max(mean_touch, 1.0)) / 4.0, min(cv_touch, 1.0))
-
-        if mean_touch > 0 and (max_touch > 2.0 * mean_touch or cv_touch > 0.5):
-            worst_rank = max(per_rank_list, key=lambda x: x["touch_bytes"])["rank"]
+    if canonical_total_events > 0:
+        ls_ratio = _safe_div(late_sender_count, canonical_total_events)
+        if ls_ratio > 0.05:
+            score = min(ls_ratio * 4.0, 1.0)
             issues.append({
-                "type": "communication_imbalance",
+                "type": "late_sender",
                 "severity": _severity(score),
                 "score": score,
-                "description": "Communication volume is imbalanced across ranks; rank {} is substantially busier than average.".format(
-                    worst_rank
+                "description": "Detected {} instances of Late Sender. Receivers are posting before sends arrive (total wasted time {:.3f}s).".format(
+                    late_sender_count, late_sender_time
                 ),
-                "ranks": [worst_rank],
                 "metrics": {
-                    "max_touch_bytes": max_touch,
-                    "mean_touch_bytes": mean_touch,
-                    "touch_bytes_cv": cv_touch,
-                    "max_over_mean": _safe_div(max_touch, max(mean_touch, 1.0)),
-                },
+                    "late_sender_count": late_sender_count,
+                    "fraction_of_traffic": ls_ratio,
+                    "wasted_time_sec": late_sender_time,
+                }
             })
 
-    # Issue: barrier skew / load imbalance
-    if barrier_spreads and runtime > 0.0:
-        relative_max_spread = _safe_div(max_barrier_spread, runtime)
-        relative_avg_spread = _safe_div(avg_barrier_spread, runtime)
-        score = max(relative_max_spread * 5.0, relative_avg_spread * 10.0)
-
-        if relative_max_spread >= 0.02 or relative_avg_spread >= 0.005:
+        lr_ratio = _safe_div(late_receiver_count, canonical_total_events)
+        if lr_ratio > 0.05:
+            score = min(lr_ratio * 4.0, 1.0)
             issues.append({
-                "type": "barrier_imbalance",
+                "type": "late_receiver",
                 "severity": _severity(score),
-                "score": min(score, 1.0),
-                "description": "Barrier arrival times are spread out, suggesting load imbalance or uneven progress before synchronization points.",
+                "score": score,
+                "description": "Detected {} instances of Late Receiver. Sends are posted before receives are ready (total delayed time {:.3f}s).".format(
+                    late_receiver_count, late_receiver_time
+                ),
                 "metrics": {
-                    "common_barrier_count": common_barriers,
+                    "late_receiver_count": late_receiver_count,
+                    "fraction_of_traffic": lr_ratio,
+                    "delayed_time_sec": late_receiver_time,
+                }
+            })
+
+    if collective_total_events > 0:
+        lb_ratio = _safe_div(late_broadcaster_count, collective_total_events)
+        if lb_ratio > 0.05:
+            score = min(lb_ratio * 4.0, 1.0)
+            issues.append({
+                "type": "late_broadcaster",
+                "severity": _severity(score),
+                "score": score,
+                "description": "Detected {} cases where non-root ranks reach MPI_Bcast before the broadcaster is ready (total wasted time {:.3f}s).".format(
+                    late_broadcaster_count, late_broadcaster_time
+                ),
+                "metrics": {
+                    "late_broadcaster_count": late_broadcaster_count,
+                    "fraction_of_collectives": lb_ratio,
+                    "wasted_time_sec": late_broadcaster_time,
+                }
+            })
+
+        er_ratio = _safe_div(early_reduce_count, collective_total_events)
+        if er_ratio > 0.05:
+            score = min(er_ratio * 4.0, 1.0)
+            issues.append({
+                "type": "early_reduce_arrival",
+                "severity": _severity(score),
+                "score": score,
+                "description": "Detected {} cases where workers arrive at MPI_Reduce before the root is ready (total wasted time {:.3f}s).".format(
+                    early_reduce_count, early_reduce_time
+                ),
+                "metrics": {
+                    "early_reduce_count": early_reduce_count,
+                    "fraction_of_collectives": er_ratio,
+                    "wasted_time_sec": early_reduce_time,
+                }
+            })
+
+    if small1k_ratio >= 0.6 and canonical_total_events > 0:
+        score = min(small1k_ratio, 1.0)
+        issues.append({
+            "type": "small_message_pressure",
+            "severity": _severity(score),
+            "score": score,
+            "description": "A high fraction of canonical traffic uses very small payloads (<1KB: {:.1%}), which may increase message-rate overhead.".format(
+                small1k_ratio
+            ),
+            "metrics": {
+                "small_lt_1kb_ratio": small1k_ratio,
+                "small_lt_1kb_events": small1k_total,
+            }
+        })
+
+    if touch_cv >= 1.2 and total_ranks > 1:
+        score = min(touch_cv / 2.0, 1.0)
+        issues.append({
+            "type": "rank_traffic_imbalance",
+            "severity": _severity(score),
+            "score": score,
+            "description": "Per-rank communication volume is strongly imbalanced (CV {:.3f}).".format(touch_cv),
+            "metrics": {
+                "touch_bytes_cv": touch_cv,
+                "top_ranks_by_touch": top_ranks_by_touch[:5],
+            }
+        })
+
+    if top_root_share >= 0.7 and rooted_total_bytes > 0:
+        score = min(top_root_share, 1.0)
+        issues.append({
+            "type": "collective_root_bottleneck",
+            "severity": _severity(score),
+            "score": score,
+            "description": "One root rank accounts for {:.1%} of rooted collective bytes, which may indicate a root bottleneck.".format(
+                top_root_share
+            ),
+            "metrics": {
+                "top_root": rooted_collective_summary[0]["root"] if rooted_collective_summary else None,
+                "top_root_share": top_root_share,
+            }
+        })
+
+    if barrier_spreads and runtime > 0.0:
+        rel_barrier_spread = _safe_div(max_barrier_spread, runtime)
+        if max_barrier_spread >= 0.001 and rel_barrier_spread >= 0.01:
+            score = min(rel_barrier_spread * 5.0, 1.0)
+            issues.append({
+                "type": "barrier_arrival_skew",
+                "severity": _severity(score),
+                "score": score,
+                "description": "Barriers exhibit noticeable arrival skew (max spread {:.6f}s, average {:.6f}s).".format(
+                    max_barrier_spread, avg_barrier_spread
+                ),
+                "metrics": {
                     "max_barrier_spread": max_barrier_spread,
                     "avg_barrier_spread": avg_barrier_spread,
-                    "max_spread_fraction_of_runtime": relative_max_spread,
-                    "avg_spread_fraction_of_runtime": relative_avg_spread,
-                    "top_spread_barriers": sorted(barrier_spreads, key=lambda x: x["spread"], reverse=True)[:10],
-                },
+                    "barrier_instances": len(barrier_spreads),
+                }
             })
 
-    # Issue: synchronization-heavy behaviour
-    sync_completion_ratio = _safe_div(completion_total_events + barrier_total_events, max(1, canonical_total_events))
-    if canonical_total_events > 0 and sync_completion_ratio >= 0.5:
-        score = min(sync_completion_ratio / 2.0, 1.0)
+    if completion_to_transfer_ratio >= 1.0 and completion_total_events > 0:
+        score = min(completion_to_transfer_ratio / 2.0, 1.0)
         issues.append({
-            "type": "synchronization_heavy",
+            "type": "completion_overhead",
             "severity": _severity(score),
             "score": score,
-            "description": "The trace contains many wait/test/barrier events relative to canonical data transfers.",
+            "description": "Completion calls are very frequent relative to canonical transfers (ratio {:.3f}).".format(
+                completion_to_transfer_ratio
+            ),
             "metrics": {
                 "completion_events": completion_total_events,
-                "barrier_events": barrier_total_events,
-                "canonical_transfer_events": canonical_total_events,
-                "sync_plus_completion_per_transfer": sync_completion_ratio,
-            },
+                "completion_to_transfer_ratio": completion_to_transfer_ratio,
+            }
         })
 
-    # Issue: root bottleneck in rooted collectives
-    if rooted_collective_summary:
-        total_rooted_bytes = sum(x["bytes"] for x in rooted_collective_summary)
-        if total_rooted_bytes > 0:
-            top_root = rooted_collective_summary[0]
-            top_root_frac = _safe_div(top_root["bytes"], total_rooted_bytes)
-            score = top_root_frac
-
-            if top_root_frac >= 0.5:
-                issues.append({
-                    "type": "collective_root_bottleneck",
-                    "severity": _severity(score),
-                    "score": score,
-                    "description": "Rooted collective traffic is concentrated on rank {}, which may become a communication bottleneck.".format(
-                        top_root["root"]
-                    ),
-                    "ranks": [top_root["root"]],
-                    "metrics": {
-                        "rooted_collective_fraction": top_root_frac,
-                        "rooted_collective_bytes": top_root["bytes"],
-                        "rooted_collective_events": top_root["events"],
-                        "calls": top_root["calls"],
-                    },
-                })
-
-    # Issue: hotspot link
-    if top_links and canonical_total_bytes > 0:
-        hottest = top_links[0]
-        hottest_frac = _safe_div(hottest["bytes"], canonical_total_bytes)
-        score = hottest_frac
-
-        if hottest_frac >= 0.2:
-            issues.append({
-                "type": "link_hotspot",
-                "severity": _severity(score),
-                "score": score,
-                "description": "A single sender/receiver link carries a large fraction of canonical traffic.",
-                "pairs": [[hottest["sender"], hottest["receiver"]]],
-                "metrics": {
-                    "sender": hottest["sender"],
-                    "receiver": hottest["receiver"],
-                    "bytes": hottest["bytes"],
-                    "messages": hottest["messages"],
-                    "fraction_of_canonical_bytes": hottest_frac,
-                },
-            })
-
-    # Issue: many globally synchronising collectives
-    global_collective_ratio = _safe_div(global_collective_total_events, max(1, collective_total_events))
-    if global_collective_total_events >= 20 and global_collective_ratio >= 0.5:
-        score = min(global_collective_ratio, 1.0)
+    if top_link_share >= 0.35 and canonical_total_bytes > 0:
+        score = min(top_link_share * 2.0, 1.0)
         issues.append({
-            "type": "global_collective_heavy",
+            "type": "link_hotspot",
             "severity": _severity(score),
             "score": score,
-            "description": "A large fraction of collective activity consists of globally synchronising collectives such as Allreduce/Allgather.",
+            "description": "A single sender/receiver pair carries a large share of bytes ({:.1%}).".format(top_link_share),
             "metrics": {
-                "global_collective_events": global_collective_total_events,
-                "collective_events": collective_total_events,
-                "global_collective_fraction": global_collective_ratio,
-            },
+                "top_link_share": top_link_share,
+                "top_link": top_links[0] if top_links else None,
+            }
         })
 
-    # Sort issues so the most severe appear first.
     issues.sort(key=lambda x: x.get("score", 0.0), reverse=True)
 
-    # Time windows for visualisation.
     window_count = 1
     if runtime > 0.0:
         window_count = min(40, max(10, len(sorted_timeline) // 50000 + 10))
@@ -1245,12 +1445,6 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
         print("Error: File '{}' not found.".format(mpic_filepath), file=sys.stderr)
         sys.exit(1)
 
-    process_info_fmt = "=i i i i 1024s"
-    p2p_small_fmt = "=d i i i i i i"
-    p2p_large_fmt = "=d i i i i i i i i i i"
-
-    process_info_size = struct.calcsize(process_info_fmt)
-
     data = {
         "metadata": {
             "total_ranks": 0,
@@ -1259,131 +1453,75 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
             "system_name": "Unknown Cluster",
         },
         "topology": [],
+        "time_anchors": [],
         "timeline": [],
         "statistics": {},
+        "hardware_blueprint": None,
     }
 
     hw_lookup = load_hardware_map(hw_filepath) if hw_filepath else {}
 
     with _open_maybe_gzip(mpic_filepath) as f:
-        global_header_fmt = "=i 64s 1024s"
-        global_header_size = struct.calcsize(global_header_fmt)
+        raw_file = f.read()
 
-        header_bytes = f.read(global_header_size)
-        if not header_bytes or len(header_bytes) < global_header_size:
-            print("Error: Empty or corrupted file header.", file=sys.stderr)
-            sys.exit(1)
-
-        total_ranks, raw_date, raw_prog = struct.unpack(global_header_fmt, header_bytes)
-
-        run_date = _cstr(raw_date)
-        prog_name = _cstr(raw_prog)
-
-        data["metadata"]["total_ranks"] = total_ranks
-        data["metadata"]["date"] = run_date
-        data["metadata"]["program"] = prog_name
-
-        # Process information.
-        for idx in range(total_ranks):
-            proc_bytes = f.read(process_info_size)
-            if len(proc_bytes) != process_info_size:
-                print("Error: truncated process info block at rank index {}.".format(idx), file=sys.stderr)
-                sys.exit(1)
-
-            rank, pid, core, chip, hostname_b = struct.unpack(process_info_fmt, proc_bytes)
-            hostname = _cstr(hostname_b)
-
-            hw_info = hw_lookup.get(hostname, {
-                "x": rank * 15,
-                "y": 0,
-                "z": 0,
-                "cab_id": None,
-                "rack_id": None,
-                "blade_id": None,
-            })
-
-            topo_entry = {
-                "rank": rank,
-                "pid": pid,
-                "core": core,
-                "chip": chip,
-                "hostname": hostname,
-                "x": hw_info.get("x", rank * 15),
-                "y": hw_info.get("y", 0),
-                "z": hw_info.get("z", 0),
-            }
-
-            if "cab_id" in hw_info:
-                topo_entry["cab_id"] = hw_info.get("cab_id")
-            if "rack_id" in hw_info:
-                topo_entry["rack_id"] = hw_info.get("rack_id")
-            if "blade_id" in hw_info:
-                topo_entry["blade_id"] = hw_info.get("blade_id")
-
-            data["topology"].append(topo_entry)
-
-        raw_sections = f.read()
-
-    # Preferred parse is strict; salvage mode if needed.
     try:
-        _parse_sections_strict(
-            raw_sections,
-            data["metadata"]["total_ranks"],
-            data,
-            p2p_small_fmt,
-            p2p_large_fmt,
-        )
+        metadata, topology, anchors, sections_offset = _parse_mpic_header(raw_file, hw_lookup)
+    except Exception as exc:
+        print("Error: failed to parse header: {}".format(exc), file=sys.stderr)
+        sys.exit(1)
+
+    data["metadata"].update(metadata)
+    data["topology"] = topology
+    data["time_anchors"] = anchors
+
+    raw_sections = raw_file[sections_offset:]
+
+    try:
+        _parse_sections_strict(raw_sections, data["metadata"]["total_ranks"], data)
     except Exception as strict_err:
-        print(
-            "Warning: strict parse failed ({}). Falling back to salvage parser.".format(strict_err),
-            file=sys.stderr
-        )
+        print("Warning: strict parse failed ({}). Falling back to salvage parser.".format(strict_err), file=sys.stderr)
         data["timeline"] = []
         data["statistics"] = {}
-        _parse_sections_salvage(
-            raw_sections,
-            len(raw_sections),
-            data,
-            p2p_small_fmt,
-            p2p_large_fmt,
-        )
+        try:
+            _parse_sections_salvage(raw_sections, len(raw_sections), data)
+        except Exception as salvage_err:
+            print("Error: salvage parser failed: {}".format(salvage_err), file=sys.stderr)
+            sys.exit(1)
 
+    _apply_time_registration(data)
 
     print("Sorting the timeline...")
+    data["timeline"].sort(
+        key=lambda x: (
+            x["epoch_ns"] if x.get("epoch_ns") is not None else float("inf"),
+            x["time"],
+            x["event_id"],
+            x["rank_recording"],
+        )
+    )
 
-    # Chronological ordering.
-    data["timeline"].sort(key=lambda x: (x["time"], x["event_id"], x["rank_recording"]))
-
-    print("Reading in the hardware blueprint...");
-
-    # Hardware blueprint.
+    print("Reading in the hardware blueprint...")
     if hw_filepath and os.path.exists(hw_filepath):
         with open(hw_filepath, "r") as f:
             blueprint = json.load(f)
             data["hardware_blueprint"] = blueprint
-
             if "metadata" in blueprint and "system_name" in blueprint["metadata"]:
                 data["metadata"]["system_name"] = blueprint["metadata"]["system_name"]
-    else:
-        data["hardware_blueprint"] = None
-     
-    print("Running analysis on the timeline...")
+
     data["analysis"] = analyse_trace(data)
 
-    # Chunk and compress the timeline.
     CHUNK_SIZE = 500000
     chunks_index = []
     compressed_payloads = []
     current_byte_offset = 0
 
     total_events = len(data["timeline"])
-    total_chunks = (total_events + CHUNK_SIZE - 1) // CHUNK_SIZE
+    total_chunks = (total_events + CHUNK_SIZE - 1) // CHUNK_SIZE if total_events > 0 else 0
 
     print("Compressing {} chunks...".format(total_chunks))
-    print_progress(0, total_chunks, prefix='Compressing:  ', suffix='Complete', length=40)
+    print_progress(0, max(total_chunks, 1), prefix='Compressing:  ', suffix='Complete', length=40)
 
     for idx, i in enumerate(range(0, total_events, CHUNK_SIZE)):
-
         chunk_data = data["timeline"][i:i + CHUNK_SIZE]
         chunk_json = json.dumps(chunk_data, separators=(",", ":")).encode("utf-8")
         compressed_chunk = zlib.compress(chunk_json)
@@ -1398,11 +1536,12 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
         compressed_payloads.append(compressed_chunk)
         current_byte_offset += len(compressed_chunk)
 
-        print_progress(idx + 1, total_chunks, prefix='Compressing:  ', suffix='Complete', length=40)
+        print_progress(idx + 1, max(total_chunks, 1), prefix='Compressing:  ', suffix='Complete', length=40)
 
     header_data = {
         "metadata": data["metadata"],
         "topology": data["topology"],
+        "time_anchors": data["time_anchors"],
         "statistics": data["statistics"],
         "hardware_blueprint": data["hardware_blueprint"],
         "analysis": data["analysis"],
@@ -1411,9 +1550,7 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
 
     header_json = json.dumps(header_data, separators=(",", ":")).encode("utf-8")
     compressed_header = zlib.compress(header_json)
-    header_length = len(compressed_header)
 
-    # Output filename handling.
     output_filename = mpic_filepath
     if output_filename.endswith(".mpic.gz"):
         output_filename = output_filename[:-8] + ".mpix"
@@ -1423,7 +1560,7 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
         output_filename = output_filename + ".mpix"
 
     with open(output_filename, "wb") as f:
-        f.write(struct.pack("<I", header_length))
+        f.write(struct.pack("<I", len(compressed_header)))
         f.write(compressed_header)
         for payload in compressed_payloads:
             f.write(payload)
@@ -1435,6 +1572,9 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
     print_summary_table(data["statistics"])
     print_analysis_summary(data["analysis"])
 
+# -----------------------------------------------------------------------------
+# CLI
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

@@ -3,8 +3,8 @@ program test_fortran_nonblocking_any_source_wait
   include 'mpif.h'
 
   integer :: ierr, rank, size
-  integer :: msg1, msg2, go, tail, count
-  integer :: recvbuf(4)
+  integer :: msg1, msg2, go, tail, msg_count
+  integer, asynchronous :: recvbuf(4)
   integer :: req
   integer :: status(MPI_STATUS_SIZE)
 
@@ -28,11 +28,14 @@ program test_fortran_nonblocking_any_source_wait
   if (rank .eq. 0) then
      call MPI_IRECV(recvbuf, 4, MPI_INTEGER, MPI_ANY_SOURCE, 210, MPI_COMM_WORLD, req, ierr)
      call MPI_WAIT(req, status, ierr)
-     call MPI_GET_COUNT(status, MPI_INTEGER, count, ierr)
+     call MPI_GET_COUNT(status, MPI_INTEGER, msg_count, ierr)
 
-     if (status(MPI_SOURCE) .ne. 1 .or. count .ne. 1 .or. recvbuf(1) .ne. 111) then
+     if (status(MPI_SOURCE) .ne. 1 .or. msg_count .ne. 1 .or. recvbuf(1) .ne. 111) then
         write(*,*) 'rank 0 expected source=1 count=1 value=111, got source=', &
-                   status(MPI_SOURCE), ' count=', count, ' value=', recvbuf(1)
+                   status(MPI_SOURCE), ' count=', msg_count, ' value=', recvbuf(1)
+        write(*,*) status(MPI_SOURCE), status(MPI_SOURCE) .ne. 1
+        write(*,*) msg_count, msg_count .ne. 1
+        write(*,*) recvbuf(1), recvbuf(1) .ne. 111
         call MPI_ABORT(MPI_COMM_WORLD, 2, ierr)
      end if
 

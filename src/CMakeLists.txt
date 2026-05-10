@@ -81,11 +81,20 @@ set(MPI_TRACE_COMMON_DEFINES
 )
 
 if(MPI_TRACE_HAVE_FORTRAN)
-    list(APPEND MPI_TRACE_COMMON_SOURCES fortran_mpi_helper.f90)
-    list(APPEND MPI_TRACE_COMMON_LIBS MPI::MPI_Fortran)
+    list(APPEND MPI_TRACE_COMMON_SOURCES
+        fortran_mpi_helper.f90
+        mpi_communication_tracking_f08_helpers.c
+        mpi_communication_tracking_f08_wrappers.f90
+    )
+
+    list(APPEND MPI_TRACE_COMMON_LIBS
+        MPI::MPI_Fortran
+    )
+
     list(APPEND MPI_TRACE_COMMON_DEFINES
         MPI_TRACE_ENABLE_FORTRAN_SUPPORT=1
         MPI_TRACE_ENABLE_FORTRAN_HELPER=1
+        MPI_TRACE_ENABLE_FORTRAN_F08=1
     )
 endif()
 
@@ -106,6 +115,13 @@ target_compile_options(mpitrace_file PRIVATE
 )
 set_target_properties(mpitrace_file PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+if(MPI_TRACE_HAVE_FORTRAN)
+    set_source_files_properties(
+        mpi_tracking_f08_wrappers.F90
+        PROPERTIES Fortran_PREPROCESS ON
+    )
+endif()
+
 # =========================================================================
 # Shared-Memory Telemetry Library (LD_PRELOAD target)
 # =========================================================================
@@ -122,6 +138,13 @@ target_compile_options(mpitrace_shm PRIVATE
     $<$<COMPILE_LANGUAGE:Fortran>:${COMMON_Fortran_COMPILER_FLAGS}>
 )
 set_target_properties(mpitrace_shm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(MPI_TRACE_HAVE_FORTRAN)
+    set_source_files_properties(
+        mpi_tracking_f08_wrappers.F90
+        PROPERTIES Fortran_PREPROCESS ON
+    )
+endif()
 
 # =========================================================================
 # The Standalone Telemetry Daemon Executable

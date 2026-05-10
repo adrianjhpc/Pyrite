@@ -1,13 +1,13 @@
 program test_fortran_testall
+  use mpi_f08
   implicit none
-  include 'mpif.h'
 
   integer :: ierr, rank, size
   integer :: ready
   integer :: send0, send1
   integer, asynchronous :: recv0(4), recv1(4)
-  integer :: reqs(2)
-  integer :: statuses(MPI_STATUS_SIZE, 2)
+  type(MPI_Request) :: reqs(2)
+  type(MPI_Status) :: statuses(2)
   logical :: flag
 
   call MPI_INIT(ierr)
@@ -26,11 +26,10 @@ program test_fortran_testall
   send1 = 801
   recv0 = -1
   recv1 = -1
-  statuses = 0
   flag = .false.
 
   if (rank .eq. 0) then
-     call MPI_RECV(ready, 1, MPI_INTEGER, 1, 242, MPI_COMM_WORLD, statuses(:,1), ierr)
+     call MPI_RECV(ready, 1, MPI_INTEGER, 1, 242, MPI_COMM_WORLD, statuses(1), ierr)
      call MPI_SEND(send0, 1, MPI_INTEGER, 1, 240, MPI_COMM_WORLD, ierr)
      call MPI_SEND(send1, 1, MPI_INTEGER, 1, 241, MPI_COMM_WORLD, ierr)
 

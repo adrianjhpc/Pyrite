@@ -1,13 +1,13 @@
 program test_fortran_waitany
+  use mpi_f08
   implicit none
-  include 'mpif.h'
 
   integer :: ierr, rank, size
   integer :: ready, ack
   integer :: send0, send1
   integer, asynchronous :: recv0(4), recv1(4)
-  integer :: reqs(2)
-  integer :: status(MPI_STATUS_SIZE)
+  type(MPI_Request) :: reqs(2)
+  type(MPI_Status) :: status
   integer :: index, count
 
   call MPI_INIT(ierr)
@@ -45,9 +45,9 @@ program test_fortran_waitany
      call MPI_WAITANY(2, reqs, index, status, ierr)
      call MPI_GET_COUNT(status, MPI_INTEGER, count, ierr)
 
-     if (index .ne. 1 .or. status(MPI_SOURCE) .ne. 0 .or. count .ne. 1 .or. recv0(1) .ne. 100) then
+     if (index .ne. 1 .or. status%MPI_SOURCE .ne. 0 .or. count .ne. 1 .or. recv0(1) .ne. 100) then
         write(*,*) 'rank 1 expected index=1 source=0 count=1 value=100, got index=', index, &
-                   ' source=', status(MPI_SOURCE), ' count=', count, 'value=', recv0(1)
+                   ' source=', status%MPI_SOURCE, ' count=', count, 'value=', recv0(1)
         call MPI_ABORT(MPI_COMM_WORLD, 2, ierr)
      end if
 
