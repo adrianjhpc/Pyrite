@@ -1167,6 +1167,12 @@ def validate_testsome(trace):
     require_control_zero_or_from_refs(testsome, recvs, "testsome control")
     require_control_zero_or_from_refs(waitall, recvs, "testsome trailing waitall")
 
+def validate_fortran_init_finalize(trace):
+    require(trace["world_size"] == 4, "init_fortran_finalize: world size should be 4")
+
+def validate_fortran_init_finalize_f08(trace):
+    require(trace["world_size"] == 4, "init_fortran_finalize_f08: world size should be 4")
+
 def validate_fortran_nonblocking_wait(trace):
     require(trace["world_size"] == 2, "fortran_nonblocking_wait: world size should be 2")
 
@@ -2183,6 +2189,8 @@ VALIDATORS = {
     "testany": validate_testany,
     "testsome": validate_testsome,
     "init_finalize": validate_init_finalize,
+    "fortran_init_finalize": validate_fortran_init_finalize,
+    "fortran_init_finalize_f08": validate_fortran_init_finalize_f08,
     "fortran_nonblocking_wait": validate_fortran_nonblocking_wait,
     "fortran_nonblocking_wait_f08": validate_fortran_nonblocking_wait_f08,
     "fortran_nonblocking_any_source_wait": validate_fortran_nonblocking_any_source_wait,

@@ -255,6 +255,8 @@ add_mpi_trace_case(init_finalize                test_init_finalize.c            
 # -----------------------------------------------------------------------------
 
 if(MPI_TRACE_HAVE_FORTRAN_TESTS)
+    add_mpi_trace_fortran_case(fortran_init_finalize                   test_fortran_init_finalize.f90                    4)
+    add_mpi_trace_fortran_case(fortran_init_finalize_f08               test_fortran_init_finalize_f08.f90                4)
     add_mpi_trace_fortran_case(fortran_nonblocking_wait                test_fortran_nonblocking_wait.f90                 2)
     add_mpi_trace_fortran_case(fortran_nonblocking_wait_f08            test_fortran_nonblocking_wait_f08.f90             2)
     add_mpi_trace_fortran_case(fortran_nonblocking_any_source_wait     test_fortran_nonblocking_any_source_wait.f90      3)
