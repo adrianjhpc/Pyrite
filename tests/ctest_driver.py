@@ -1000,6 +1000,54 @@ def validate_waitsome(trace):
     require_control_zero_or_from_refs(waitsome, recvs, "waitsome control")
     require_control_zero_or_from_refs(waitall, recvs, "waitsome trailing waitall")
 
+def validate_waitall(trace):
+    require(trace["world_size"] == 2, "waitall: world size should be 2")
+
+    sends = require_n(
+        trace["sections"][0]["small"],
+        2,
+        message_type=MPI_ISEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    w0 = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_WAITALL_TYPE,
+        sender=0,
+        receiver=0,
+        count=2,
+        bytes=0,
+    )
+
+    recvs = require_n(
+        trace["sections"][1]["small"],
+        2,
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    w1 = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_WAITALL_TYPE,
+        sender=1,
+        receiver=1,
+        count=2,
+        bytes=0,
+    )
+
+    require_local_same_comm(sends, "waitall sends")
+    require_local_same_comm(recvs, "waitall recvs")
+    require_same_tag_multiset(sends, recvs, "waitall send/recv tags")
+
+    require_control_zero_or_from_refs(w0, sends, "waitall rank0 waitall")
+    require_control_zero_or_from_refs(w1, recvs, "waitall rank1 waitall")
+
 def validate_test_single(trace):
     require(trace["world_size"] == 2, "test_single: world size should be 2")
 
@@ -2430,6 +2478,7 @@ VALIDATORS = {
     "nonblocking_any_source_wait": validate_nonblocking_any_source_wait,
     "waitany": validate_waitany,
     "waitsome": validate_waitsome,
+    "waitall": validate_waitall,
     "test_single": validate_test_single,
     "testall": validate_testall,
     "testany": validate_testany,

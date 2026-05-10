@@ -244,6 +244,7 @@ add_mpi_trace_case(nonblocking                  test_nonblocking.c              
 add_mpi_trace_case(nonblocking_any_source_wait  test_nonblocking_any_source_wait.c  3)
 add_mpi_trace_case(waitany                      test_waitany.c                      2)
 add_mpi_trace_case(waitsome                     test_waitsome.c                     2)
+add_mpi_trace_case(waitall                      test_waitall.c                      2)
 add_mpi_trace_case(test_single                  test_test.c                         2)
 add_mpi_trace_case(testall                      test_testall.c                      2)
 add_mpi_trace_case(testany                      test_testany.c                      2)
