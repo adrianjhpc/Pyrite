@@ -682,6 +682,9 @@ def validate_sendrecv(trace):
     require_same_value(r0, "tag1", r1, "tag2", "sendrecv rank0 sendtag vs rank1 recvtag")
     require_same_value(r0, "tag2", r1, "tag1", "sendrecv rank0 recvtag vs rank1 sendtag")
 
+def validate_init_finalize(trace):
+    require(trace["world_size"] == 4, "init_finalize: world size should be 4")
+
 def validate_subcomm_send(trace):
     require(trace["world_size"] == 4, "subcomm_send: world size should be 4")
 
@@ -2179,6 +2182,7 @@ VALIDATORS = {
     "testall": validate_testall,
     "testany": validate_testany,
     "testsome": validate_testsome,
+    "init_finalize": validate_init_finalize,
     "fortran_nonblocking_wait": validate_fortran_nonblocking_wait,
     "fortran_nonblocking_wait_f08": validate_fortran_nonblocking_wait_f08,
     "fortran_nonblocking_any_source_wait": validate_fortran_nonblocking_any_source_wait,
