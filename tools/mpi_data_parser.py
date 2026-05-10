@@ -537,19 +537,20 @@ def _apply_time_registration(data):
 # Human-readable summaries
 # -----------------------------------------------------------------------------
 
-def print_summary_table(stats):
-    print("\n" + "=" * 95)
-    print(" MPI COMMUNICATION SUMMARY")
-    print("=" * 95)
+def print_summary_table(stats, total_ranks):
+    print("\n" + "=" * 115) # Increased width
+    print(f" MPI COMMUNICATION SUMMARY ({total_ranks} Ranks)")
+    print("=" * 115)
 
     if not stats:
         print(" No communication events found.")
-        print("=" * 95 + "\n")
+        print("=" * 115 + "\n")
         return
 
     ordered_calls = sorted(stats.keys(), key=lambda name: MESSAGE_TYPE_ORDER.get(name, 9999))
 
-    header = " {:<13} | ".format("MPI Call") + " | ".join("{:<10}".format(b) for b in BINS) + " | {:<8}".format("Total")
+    # Add the Per-Rank Avg column to the header
+    header = " {:<13} | ".format("MPI Call") + " | ".join("{:<10}".format(b) for b in BINS) + " | {:<8} | {:<12}".format("Total", "Per-Rank Avg")
     print(header)
     print("-" * len(header))
 
@@ -562,23 +563,39 @@ def print_summary_table(stats):
             count = bin_data.get(bucket, 0)
             total += count
             row += "{:<10} | ".format(count)
-        row += "{:<8}".format(total)
+            
+        # Calculate the average
+        avg = total / total_ranks if total_ranks > 0 else 0
+        
+        row += "{:<8} | {:<12.1f}".format(total, avg)
         print(row)
 
-    print("=" * 95 + "\n")
+    print("=" * 115 + "\n")
 
-def print_analysis_summary(analysis):
+def print_analysis_summary(analysis, total_ranks):
     print("\n" + "=" * 95)
-    print(" TRACE ANALYSIS SUMMARY")
+    print(f" TRACE ANALYSIS SUMMARY ({total_ranks} Ranks)")
     print("=" * 95)
 
     summary = analysis.get("summary", {})
-    print(" Total events:             {}".format(summary.get("total_events", 0)))
-    print(" Canonical transfers:      {}".format(summary.get("canonical_transfer_events", 0)))
-    print(" Canonical transfer bytes: {}".format(summary.get("canonical_transfer_bytes", 0)))
-    print(" Completion events:        {}".format(summary.get("completion_events", 0)))
-    print(" Barrier events:           {}".format(summary.get("barrier_events", 0)))
-    print(" Estimated runtime:        {:.6f}s".format(summary.get("estimated_runtime", 0.0)))
+    
+    tot_events = summary.get('total_events', 0)
+    can_events = summary.get('canonical_transfer_events', 0)
+    comp_events = summary.get('completion_events', 0)
+    bar_events = summary.get('barrier_events', 0)
+    
+    # Calculate Averages safely
+    avg_events = tot_events / total_ranks if total_ranks > 0 else 0
+    avg_can = can_events / total_ranks if total_ranks > 0 else 0
+    avg_comp = comp_events / total_ranks if total_ranks > 0 else 0
+    avg_bar = bar_events / total_ranks if total_ranks > 0 else 0
+
+    print(" Total events:              {:<15} (Avg per rank: {:.1f})".format(tot_events, avg_events))
+    print(" Canonical transfers:       {:<15} (Avg per rank: {:.1f})".format(can_events, avg_can))
+    print(" Canonical transfer bytes:  {:<15}".format(summary.get("canonical_transfer_bytes", 0)))
+    print(" Completion events:         {:<15} (Avg per rank: {:.1f})".format(comp_events, avg_comp))
+    print(" Barrier events:            {:<15} (Avg per rank: {:.1f})".format(bar_events, avg_bar))
+    print(" Estimated runtime:         {:.6f}s".format(summary.get("estimated_runtime", 0.0)))
 
     patterns = analysis.get("patterns", [])
     issues = analysis.get("issues", [])
@@ -1569,8 +1586,9 @@ def parse_mpic_file(mpic_filepath, hw_filepath=None):
     print("Parsed {} communication events.".format(len(data["timeline"])))
     print("Data saved to {}".format(output_filename))
 
-    print_summary_table(data["statistics"])
-    print_analysis_summary(data["analysis"])
+    total_ranks = data["metadata"].get("total_ranks", 0)
+    print_summary_table(data["statistics"], total_ranks)
+    print_analysis_summary(data["analysis"], total_ranks)
 
 # -----------------------------------------------------------------------------
 # CLI
