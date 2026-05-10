@@ -1167,6 +1167,165 @@ def validate_testsome(trace):
     require_control_zero_or_from_refs(testsome, recvs, "testsome control")
     require_control_zero_or_from_refs(waitall, recvs, "testsome trailing waitall")
 
+def validate_rsend(trace):
+    require(trace["world_size"] == 2, "rsend: world size should be 2")
+
+    rsend = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_RSEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    irecv = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    wait = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+    require_ptp_pair(rsend, irecv, "rsend")
+    require_control_zero_or_from_refs(wait, irecv, "rsend wait")
+
+def validate_bsend(trace):
+    require(trace["world_size"] == 2, "bsend: world size should be 2")
+
+    bsend = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_BSEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    recv = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_RECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_ptp_pair(bsend, recv, "bsend")
+
+def validate_ssend(trace):
+    require(trace["world_size"] == 2, "ssend: world size should be 2")
+
+    ssend = require_one(
+        trace["sections"][0]["small"],
+        message_type=MPI_SSEND_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    recv = require_one(
+        trace["sections"][1]["small"],
+        message_type=MPI_RECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    require_ptp_pair(ssend, recv, "ssend")
+
+def validate_cancel(trace):
+    require(trace["world_size"] == 2, "cancel: world size should be 2")
+
+    rank0 = trace["sections"][0]
+    rank1 = trace["sections"][1]
+
+    require_none(
+        rank1["small"],
+        message_type=MPI_IRECV_TYPE,
+        sender=0,
+        receiver=1,
+        count=1,
+        bytes=4,
+    )
+
+    wait = require_one(
+        rank1["small"],
+        message_type=MPI_WAIT_TYPE,
+        sender=1,
+        receiver=1,
+        count=1,
+        bytes=0,
+    )
+
+    b0 = require_one(
+        rank0["small"],
+        message_type=MPI_BARRIER_TYPE,
+        sender=0,
+        receiver=0,
+        count=0,
+        bytes=0,
+    )
+
+    b1 = require_one(
+        rank1["small"],
+        message_type=MPI_BARRIER_TYPE,
+        sender=1,
+        receiver=1,
+        count=0,
+        bytes=0,
+    )
+
+    require(isinstance(wait["tag"], int), "cancel wait tag should be int")
+    require(isinstance(wait["comm"], int), "cancel wait comm should be int")
+
+    require_zero(b0, "tag", "cancel barrier rank0 tag")
+    require_zero(b1, "tag", "cancel barrier rank1 tag")
+    require_comm_int(b0, "comm", "cancel barrier rank0 comm")
+    require_comm_int(b1, "comm", "cancel barrier rank1 comm")
+
+def validate_allreduce(trace):
+    require(trace["world_size"] == 4, "allreduce: world size should be 4")
+
+    for r in range(4):
+        rec = require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_ALLREDUCE_TYPE,
+            sender=r,
+            receiver=r,
+            count=4,
+            bytes=16,
+        )
+        require_zero(rec, "tag", "allreduce tag")
+        require_comm_int(rec, "comm", "allreduce comm")
+
+def validate_barrier(trace):
+    require(trace["world_size"] == 3, "barrier: world size should be 3")
+
+    for r in range(3):
+        rec = require_one(
+            trace["sections"][r]["small"],
+            message_type=MPI_BARRIER_TYPE,
+            sender=r,
+            receiver=r,
+            count=0,
+            bytes=0,
+        )
+        require_zero(rec, "tag", "barrier tag")
+        require_comm_int(rec, "comm", "barrier comm")
+
 def validate_fortran_init_finalize(trace):
     require(trace["world_size"] == 4, "init_fortran_finalize: world size should be 4")
 
@@ -2189,6 +2348,12 @@ VALIDATORS = {
     "testany": validate_testany,
     "testsome": validate_testsome,
     "init_finalize": validate_init_finalize,
+    "bsend": validate_bsend,
+    "rsend": validate_rsend,
+    "ssend": validate_ssend,
+    "barrier": validate_barrier,
+    "allreduce": validate_allreduce,
+    "cancel": validate_cancel,
     "fortran_init_finalize": validate_fortran_init_finalize,
     "fortran_init_finalize_f08": validate_fortran_init_finalize_f08,
     "fortran_nonblocking_wait": validate_fortran_nonblocking_wait,

@@ -249,6 +249,12 @@ add_mpi_trace_case(testall                      test_testall.c                  
 add_mpi_trace_case(testany                      test_testany.c                      2)
 add_mpi_trace_case(testsome                     test_testsome.c                     2)
 add_mpi_trace_case(init_finalize                test_init_finalize.c                4)
+add_mpi_trace_case(bsend                        test_bsend.c                        2)
+add_mpi_trace_case(ssend                        test_ssend.c                        2)
+add_mpi_trace_case(rsend                        test_rsend.c                        2)
+add_mpi_trace_case(barrier                      test_barrier.c                      3)
+add_mpi_trace_case(allreduce                    test_allreduce.c                    4)
+add_mpi_trace_case(cancel                       test_cancel.c                       2)
 
 # -----------------------------------------------------------------------------
 # Register Fortran tests only if available/enabled
