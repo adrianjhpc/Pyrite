@@ -130,7 +130,7 @@ your_mpi_application-YYYYMMDDHHMMSS.mpix
 ```
 
 
-## Visuaisation
+## Visualisation
 
 There are two visualisation modes that can be used. Offline visualisation uses the `libmpitrace_file.so` to produce the `*.mpix` file for a given application run, and then allows that to be visualised and explored.
 
