@@ -44,7 +44,7 @@ window.VisualiserCore = {
     sharedMaterials: {},
     tooltipEl: null,
     isDecayEnabled: true,   
- 
+    MPI_CATEGORIES, 
     // UI/Camera State
     uiMediaRecorder: null, uiRecordedChunks: [], uiStream: null,
     defaultCameraPose: null, selectedObject: null, isFollowEnabled: false,

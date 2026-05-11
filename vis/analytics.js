@@ -766,6 +766,7 @@
                     const mid = ((win.t_start || 0) + (win.t_end || 0)) / 2;
                     slider.value = mid;
                     slider.dispatchEvent(new Event("input")); // Triggers Provider seekToTime
+                    slider.dispatchEvent(new Event("change"));
                 }
             });
 
