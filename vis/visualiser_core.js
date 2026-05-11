@@ -478,6 +478,14 @@ window.VisualiserCore = {
         this.junctionPoints = [];
     },
 
+    clearGlow: function() {
+        this.activelyGlowingRanks.forEach((state) => {
+            state.mesh.setColorAt(state.instanceId, this.defaultRankColor);
+            state.mesh.instanceColor.needsUpdate = true;
+        });
+        this.activelyGlowingRanks.clear();
+    },
+
     // ---------------------------------------------------------
     // UI, HTML OVERLAYS & CAMERA 
     // ---------------------------------------------------------

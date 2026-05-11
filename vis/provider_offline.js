@@ -155,7 +155,9 @@ const OfflineProvider = {
         
         await this.ensureChunkLoadedForTime(this.currentTime);
         const activeEvents = this.getActiveEventsForWindow();
-        
+    
+        VisualiserCore.clearGlow();
+      
         VisualiserCore.renderFrame(activeEvents);
         VisualiserCore.updateDynamicSpectrogram(activeEvents, this.parsedData.statistics);
     },
