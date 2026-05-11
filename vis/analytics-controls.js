@@ -44,7 +44,7 @@
 
         const analysisContainer = document.getElementById("analysisContainer");
         const overallStatsContainer = document.getElementById("overallStatsContainer");
-        const sidebar = document.getElementById("sidebar");
+        const sidebar = document.getElementById("sidebar-right");
 
         if (analysisContainer && analysisContainer.parentNode) {
             analysisContainer.parentNode.insertBefore(container, analysisContainer.nextSibling);

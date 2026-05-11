@@ -14,14 +14,36 @@
   </head>
   <body>
     <div id="app-container">
-      <aside id="sidebar">
+      
+      <aside id="sidebar-left" class="sidebar">
         <div class="sidebar-header">
           <h2>Pyrite <span style="font-size: 0.5em; color: #8b949e; vertical-align: middle;">OFFLINE</span></h2>
         </div>
+        
         <div class="control-group">
           <label for="profileLoader" class="btn-load">📂 Load Profile</label>
           <input type="file" id="profileLoader" accept=".json, .gz, .mpix" style="width: 100%; margin-bottom: 15px;">
         </div>
+        
+        <div id="metadataContainer" style="margin-top: 20px;"></div>
+        <div id="analysisContainer" style="margin-top: 20px;"></div>
+        
+        <div style="margin-top: 20px;">
+          <h3 style="font-size: 0.75rem; color: #8b949e; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.5px;">Overall Message Stats</h3>
+          <div id="overallStatsContainer"></div>
+        </div>
+        <div style="margin-top: 20px;">
+          <h3 style="font-size: 0.75rem; color: #3fb950; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.5px;">Current Message Stats</h3>
+          <div id="activeStatsContainer"></div>
+        </div>
+      </aside>
+
+      <main id="canvas-container">
+        <div id="visCanvas"></div> 
+      </main>
+
+      <aside id="sidebar-right" class="sidebar">
+          
         <div class="control-group playback-panel">
           <h3>Timeline</h3>
           <div class="time-display">T: <span id="currentTimeLabel">0.000</span> s</div>
@@ -34,12 +56,16 @@
             </div>
           </div>
         </div>
+
+       
+ 
         <div class="control-group record-panel">
           <h3>Record</h3>
           <button id="btn-rec-ui-start">⏺ Record UI</button>
           <button id="btn-rec-ui-stop" disabled>⏹ Stop UI</button>
           <span id="recUIStatus" style="margin-left:10px;color:#8b949e;"></span>
         </div>
+
         <div class="control-group" style="margin-top: 20px;">
           <h3>Camera & Layout</h3>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -51,8 +77,7 @@
           </div>
           <div style="margin-top:10px;">
             <label style="font-size:0.85rem; color:#8b949e;">
-              <input type="checkbox" id="chk-follow" />
-              Follow selected (locks controls)
+              <input type="checkbox" id="chk-follow" /> Follow selected (locks controls)
             </label>
           </div>
           <div style="margin-top:10px;">
@@ -75,22 +100,11 @@
           </div>
           <div id="camStatus" style="margin-top:8px; font-size:0.8rem; color:#8b949e;"></div>
         </div>
-        <div id="metadataContainer" style="margin-top: 20px;"></div>
-        <div id="analysisContainer" style="margin-top: 20px;"></div>
+        
         <div id="analysis3dControlsContainer" style="margin-top: 20px;"></div>
-        <div style="margin-top: 20px;">
-          <h3 style="font-size: 0.75rem; color: #8b949e; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.5px;">Overall Message Stats</h3>
-          <div id="overallStatsContainer"></div>
-        </div>
-        <div style="margin-top: 20px;">
-          <h3 style="font-size: 0.75rem; color: #3fb950; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.5px;">Current Message Stats</h3>
-          <div id="activeStatsContainer"></div>
-        </div>
       </aside>
-      <main id="canvas-container">
-        <div id="visCanvas"></div> 
-      </main>
-      <div id="loadingOverlay" style="display: none; position: absolute; top: 20px; right: 20px; background: rgba(22, 27, 34, 0.9); color: #58a6ff; padding: 15px 25px; border-radius: 8px; border: 1px solid #30363d; font-family: 'Fira Code', monospace; font-size: 0.9rem; z-index: 1000; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+
+      <div id="loadingOverlay" style="display: none; position: absolute; top: 20px; right: 340px; background: rgba(22, 27, 34, 0.9); color: #58a6ff; padding: 15px 25px; border-radius: 8px; border: 1px solid #30363d; font-family: 'Fira Code', monospace; font-size: 0.9rem; z-index: 1000; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
         <span class="spinner" style="display: inline-block; margin-right: 10px;">⟳</span>
         <span id="loadingText">Loading Chunk...</span>
       </div>
@@ -98,6 +112,7 @@
         @keyframes spin { 100% { transform: rotate(360deg); } }
         .spinner { animation: spin 1s linear infinite; }
       </style>
+
     </div>
 
     <script src="visualiser_core.js"></script>

@@ -1,9 +1,12 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Fira+Code:wght@400;600&display=swap');
 
+* {
+     box-sizing: border-box;
+     margin: 0;
+     padding: 0;
+}
+
 body {
-    margin: 0;
-    padding: 0;
-    /* Upgraded to Inter */
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     background-color: #0d1117; 
     color: #c9d1d9;
@@ -12,135 +15,25 @@ body {
     overflow: hidden;
 }
 
-.time-display, 
-.stats-panel span, 
-.node-label {
-    font-family: 'Fira Code', monospace;
-    letter-spacing: -0.5px;
-}
-
-.sidebar-header h2 { 
-    color: #58a6ff; 
-    font-size: 1.5rem; 
-    font-weight: 700;
-    letter-spacing: -0.5px;
-}
-
-* {
-*     box-sizing: border-box;
-*         margin: 0;
-*             padding: 0;
-*             }
-*
-*             body {
-*                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-*                     background-color: #0d1117;
-*                         color: #c9d1d9;
-*                             height: 100vh;
-*                                 overflow: hidden;
-*                                 }
-*
-*                                 #app-container {
-*                                     display: flex;
-*                                         height: 100vh;
-*                                             width: 100vw;
-*                                             }
-*
-*/* Sidebar Styling */
-#sidebar {
-    width: 360px;
-    background-color: #161b22;
-    border-right: 1px solid #30363d;
-    display: flex;
-    flex-direction: column;
-    padding: 20px;
-    z-index: 10;
-    box-shadow: 2px 0 10px rgba(0,0,0,0.5);
-    overflow-y: auto;      /* Enable whole-widget vertical scrolling */
-    overflow-x: hidden;    /* Kill the horizontal scrollbars */
-    height: 100vh;         /* Ensure the sidebar takes exactly the height of the screen */
-    box-sizing: border-box
-}
-
-.sidebar-header {
-    margin-bottom: 25px;
-    border-bottom: 1px solid #30363d;
-    padding-bottom: 15px;
-}
-
-.sidebar-header h2 { color: #58a6ff; font-size: 1.4rem; }
-.sidebar-header p { font-size: 0.85rem; color: #8b949e; }
-
-.control-group {
-    background-color: #0d1117;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 15px;
-    margin-bottom: 15px;
-}
-
-.control-group h3 {
-    font-size: 0.9rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #8b949e;
-    margin-bottom: 10px;
-}
-
-/* File Loader Button Hiding the ugly default input */
-input[type="file"] { display: none; }
-.btn-load {
-    display: block;
-    text-align: center;
-    background-color: #238636;
-    color: white;
-    padding: 8px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-weight: bold;
-    transition: background 0.2s;
-}
-.btn-load:hover { background-color: #2ea043; }
-
-/* Stats & Typography */
-.stats-panel p { font-size: 0.9rem; margin-bottom: 5px; }
-.stats-panel span { font-weight: bold; color: #58a6ff; }
-
-/* Playback Controls */
-.time-display { font-family: monospace; font-size: 1.1rem; text-align: center; margin-bottom: 10px; color: #ff7b72; }
-input[type=range] { width: 100%; margin-bottom: 10px; cursor: pointer; }
-.playback-controls { display: flex; justify-content: space-between; align-items: center; }
-button {
-    background-color: #1f6feb; color: white; border: none; padding: 6px 12px;
-    border-radius: 4px; cursor: pointer; font-weight: bold;
-}
-button:disabled { background-color: #30363d; color: #8b949e; cursor: not-allowed; }
-button:hover:not(:disabled) { background-color: #388bfd; }
-
-.inspector-panel { flex-grow: 1; overflow-y: auto; font-size: 0.85rem; line-height: 1.4; color: #a5d6ff; }
-
-body {
-    margin: 0;
-    padding: 0;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background-color: #0d1117; /* Dark background */
-    color: #c9d1d9;
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden;
-}
-
+/* =========================================
+ *    MAIN LAYOUT (3-Column Flexbox)
+ * ========================================= */
 #app-container {
     display: flex;
-    width: 100vw;
+    flex-direction: row;
     height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+    background-color: #0d1117; 
 }
 
+/* Canvas takes up all remaining space in the middle */
 #canvas-container {
-    flex-grow: 1;
-    height: 100vh;
+    flex: 1; 
     position: relative;
-    background-color: #0d1117; /* Fallback dark color */
+    height: 100%;
+    overflow: hidden;
+    background-color: #0d1117;
 }
 
 #visCanvas {
@@ -162,7 +55,150 @@ body {
     height: 100% !important;
 }
 
-/* Custom Dark Mode Scrollbar */
+/* =========================================
+ *    SIDEBAR STYLING
+ * ========================================= */
+
+/* Base styling applied to BOTH sidebars */
+.sidebar {
+    width: 360px;
+    min-width: 360px;
+    height: 100%;
+    overflow-y: auto;      /* Enable vertical scrolling */
+    overflow-x: hidden;    /* Kill horizontal scrollbars */
+    background-color: #161b22;
+    padding: 20px;
+    box-sizing: border-box;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Specific borders and shadows for visual separation */
+#sidebar-left {
+    border-right: 1px solid #30363d;
+    box-shadow: 2px 0 10px rgba(0,0,0,0.5);
+}
+
+#sidebar-right {
+    border-left: 1px solid #30363d;
+    box-shadow: -2px 0 10px rgba(0,0,0,0.5);
+}
+
+.sidebar-header {
+    margin-bottom: 25px;
+    border-bottom: 1px solid #30363d;
+    padding-bottom: 15px;
+}
+
+.sidebar-header h2 { 
+    color: #58a6ff; 
+    font-size: 1.5rem; 
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+.sidebar-header p { 
+    font-size: 0.85rem; 
+    color: #8b949e; 
+}
+
+.control-group {
+    background-color: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 15px;
+    margin-bottom: 15px;
+}
+
+.control-group h3 {
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #8b949e;
+    margin-bottom: 10px;
+}
+
+/* =========================================
+ *    UI COMPONENTS & TYPOGRAPHY
+ * ========================================= */
+
+.time-display, 
+.stats-panel span, 
+.node-label {
+    font-family: 'Fira Code', monospace;
+    letter-spacing: -0.5px;
+}
+
+/* File Loader Button (Hiding the ugly default input) */
+input[type="file"] { 
+    display: none; 
+}
+
+.btn-load {
+    display: block;
+    text-align: center;
+    background-color: #238636;
+    color: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background 0.2s;
+}
+
+.btn-load:hover { 
+    background-color: #2ea043; 
+}
+
+/* Stats & Typography */
+.stats-panel p { font-size: 0.9rem; margin-bottom: 5px; }
+.stats-panel span { font-weight: bold; color: #58a6ff; }
+.inspector-panel { flex-grow: 1; overflow-y: auto; font-size: 0.85rem; line-height: 1.4; color: #a5d6ff; }
+
+/* Playback Controls */
+.time-display { 
+    font-size: 1.1rem; 
+    text-align: center; 
+    margin-bottom: 10px; 
+    color: #ff7b72; 
+}
+
+input[type=range] { 
+    width: 100%; 
+    margin-bottom: 10px; 
+    cursor: pointer; 
+}
+
+.playback-controls { 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+}
+
+button {
+    background-color: #1f6feb; 
+    color: white; 
+    border: none; 
+    padding: 6px 12px;
+    border-radius: 4px; 
+    cursor: pointer; 
+    font-weight: bold;
+}
+
+button:disabled { 
+    background-color: #30363d; 
+    color: #8b949e; 
+    cursor: not-allowed; 
+}
+
+button:hover:not(:disabled) { 
+    background-color: #388bfd; 
+}
+
+/* =========================================
+ *    CUSTOM SCROLLBARS (Dark Mode)
+ * ========================================= */
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
