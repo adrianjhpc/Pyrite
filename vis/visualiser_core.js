@@ -44,6 +44,9 @@ window.VisualiserCore = {
     sharedMaterials: {},
     tooltipEl: null,
     isDecayEnabled: true,   
+    // --- Recording State ---
+    mediaRecorder: null,
+    recordedChunks: [],
     MPI_CATEGORIES, 
     // UI/Camera State
     uiMediaRecorder: null, uiRecordedChunks: [], uiStream: null,
@@ -487,6 +490,89 @@ window.VisualiserCore = {
     },
 
     // ---------------------------------------------------------
+    // RECORDING FUNCTIONS
+    // ---------------------------------------------------------
+    // ==========================================
+    // UI RECORDING (MediaRecorder API)
+    // ==========================================
+    startUIRecording: function() {
+        const canvasEl = document.querySelector("#visCanvas canvas");
+        if (!canvasEl) {
+            console.error("Canvas not found! Cannot start recording.");
+            return;
+        }
+
+        recordedChunks = [];
+        // Capture at 60 FPS
+        const stream = canvasEl.captureStream(60); 
+        
+        try {
+            // Try high-quality VP9 first
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp9' });
+        } catch (e) {
+            // Fallback for browsers that don't support VP9 explicitly
+            mediaRecorder = new MediaRecorder(stream); 
+        }
+
+        mediaRecorder.ondataavailable = function(event) {
+            if (event.data.size > 0) {
+                recordedChunks.push(event.data);
+            }
+        };
+
+        mediaRecorder.onstop = function() {
+            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            
+            // Create a hidden link to trigger the download
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = `pyrite-trace-${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
+            document.body.appendChild(a);
+            a.click();
+            
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 100);
+        },
+
+        mediaRecorder.start();
+        
+        // Update UI state
+        const btnStart = document.getElementById("btn-rec-ui-start");
+        const btnStop = document.getElementById("btn-rec-ui-stop");
+        const statusEl = document.getElementById("recUIStatus");
+        
+        if (btnStart) btnStart.disabled = true;
+        if (btnStop) btnStop.disabled = false;
+        if (statusEl) {
+            statusEl.innerHTML = "🔴 Recording...";
+            statusEl.style.color = "#f85149";
+        }
+    },
+
+    stopUIRecording: function() {
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+            mediaRecorder.stop();
+        }
+        
+        // Update UI state
+        const btnStart = document.getElementById("btn-rec-ui-start");
+        const btnStop = document.getElementById("btn-rec-ui-stop");
+        const statusEl = document.getElementById("recUIStatus");
+        
+        if (btnStart) btnStart.disabled = false;
+        if (btnStop) btnStop.disabled = true;
+        if (statusEl) {
+            statusEl.innerHTML = "💾 Saved!";
+            statusEl.style.color = "#3fb950";
+            setTimeout(() => { if (statusEl.innerHTML.includes("Saved")) statusEl.innerHTML = ""; }, 3000);
+        }
+    },
+
+    // ---------------------------------------------------------
     // UI, HTML OVERLAYS & CAMERA 
     // ---------------------------------------------------------
     initTooltip: function() {
@@ -682,6 +768,8 @@ window.VisualiserCore = {
         const views = JSON.parse(localStorage.getItem("mpiVis.savedViews.v1") || "{}"); delete views[name];
         localStorage.setItem("mpiVis.savedViews.v1", JSON.stringify(views)); this.initSavedViewsUI();
     },
+
+
 
     // HTML Generators
     renderMetadata: function(meta, ranks, nodes) {
