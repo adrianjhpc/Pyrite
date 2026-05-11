@@ -3,6 +3,7 @@
 
     let analyticsWindowBars = [];
     let analyticsRootContainer = null;
+    let currentParsedData = null; // Store data locally
 
     function ensureAnalyticsContainer() {
         let container = document.getElementById("analysisContainer");
@@ -95,10 +96,6 @@
         return `${(s / 60).toFixed(2)} min`;
     }
 
-    function formatPercent(frac) {
-        return `${((Number(frac) || 0) * 100).toFixed(1)}%`;
-    }
-
     function severityColour(sev) {
         if (sev === "critical") return "#f85149";
         if (sev === "warning") return "#d29922";
@@ -106,57 +103,41 @@
     }
 
     function issueHasSpatialTargets(issue) {
-    if (!issue) return false;
-
-    if (Array.isArray(issue.ranks) && issue.ranks.length > 0) {
-        return true;
-    }
-
-    if (Array.isArray(issue.pairs)) {
-        const hasPair = issue.pairs.some(pair => Array.isArray(pair) && pair.length === 2);
-        if (hasPair) return true;
-    }
-
-    const m = issue.metrics || {};
-    if (Number.isInteger(m.root)) return true;
-    if (Number.isInteger(m.sender) && Number.isInteger(m.receiver)) return true;
-
-    return false;
-}
-
-function getFocusedIssueIndexFrom3D() {
-    if (window.Analytics3D && typeof window.Analytics3D.getFocusedIssueIndex === "function") {
-        return window.Analytics3D.getFocusedIssueIndex();
-    }
-    return null;
-}
-
-function toggleIssueIsolation(issueIndex) {
-    if (!window.Analytics3D) return;
-
-    const current = getFocusedIssueIndexFrom3D();
-
-    if (current === issueIndex) {
-        if (typeof window.Analytics3D.clearFocus === "function") {
-            window.Analytics3D.clearFocus();
+        if (!issue) return false;
+        if (Array.isArray(issue.ranks) && issue.ranks.length > 0) return true;
+        if (Array.isArray(issue.pairs)) {
+            const hasPair = issue.pairs.some(pair => Array.isArray(pair) && pair.length === 2);
+            if (hasPair) return true;
         }
-    } else {
-        if (typeof window.Analytics3D.focusIssue === "function") {
-            window.Analytics3D.focusIssue(issueIndex);
+        const m = issue.metrics || {};
+        if (Number.isInteger(m.root)) return true;
+        if (Number.isInteger(m.sender) && Number.isInteger(m.receiver)) return true;
+        return false;
+    }
+
+    function getFocusedIssueIndexFrom3D() {
+        if (window.Analytics3D && typeof window.Analytics3D.getFocusedIssueIndex === "function") {
+            return window.Analytics3D.getFocusedIssueIndex();
         }
+        return null;
     }
 
-    renderAnalytics();
-}
-
-function clearIssueIsolationUI() {
-    if (!window.Analytics3D) return;
-    if (typeof window.Analytics3D.clearFocus === "function") {
-        window.Analytics3D.clearFocus();
+    function toggleIssueIsolation(issueIndex) {
+        if (!window.Analytics3D) return;
+        const current = getFocusedIssueIndexFrom3D();
+        if (current === issueIndex) {
+            if (typeof window.Analytics3D.clearFocus === "function") window.Analytics3D.clearFocus();
+        } else {
+            if (typeof window.Analytics3D.focusIssue === "function") window.Analytics3D.focusIssue(issueIndex);
+        }
+        renderAnalytics(currentParsedData);
     }
-    renderAnalytics();
-}
 
+    function clearIssueIsolationUI() {
+        if (!window.Analytics3D) return;
+        if (typeof window.Analytics3D.clearFocus === "function") window.Analytics3D.clearFocus();
+        renderAnalytics(currentParsedData);
+    }
 
     function createMetricGrid(items) {
         const grid = document.createElement("div");
@@ -214,10 +195,12 @@ function clearIssueIsolationUI() {
         return pill;
     }
 
+    // --- MODULARIZED FOCUS FUNCTIONS ---
     function focusRankFromAnalytics(rankId) {
-        if (typeof rankMap === "undefined") return;
+        const rMap = window.VisualiserCore ? window.VisualiserCore.rankMap : null;
+        if (!rMap) return;
 
-        const sData = rankMap.get(rankId);
+        const sData = rMap.get(rankId);
         if (!sData) return;
 
         const targetPosition = sData.localPos.clone().add(sData.nodeGroup.position);
@@ -231,30 +214,31 @@ function clearIssueIsolationUI() {
             name: `Rank ${rankId}`
         };
 
-        if (typeof setSelectedObject === "function") {
-            setSelectedObject(mockObj);
+        if (window.VisualiserCore && typeof window.VisualiserCore.setSelectedObject === "function") {
+            window.VisualiserCore.setSelectedObject(mockObj);
         }
-        if (typeof flyCameraTo === "function") {
-            flyCameraTo(targetPosition);
+        if (window.VisualiserCore && typeof window.VisualiserCore.flyCameraTo === "function") {
+            window.VisualiserCore.flyCameraTo(targetPosition);
         }
     }
 
     function focusLinkFromAnalytics(sender, receiver) {
-        if (typeof rankMap === "undefined") return;
+        const rMap = window.VisualiserCore ? window.VisualiserCore.rankMap : null;
+        if (!rMap) return;
 
-        const sData = rankMap.get(sender);
-        const rData = rankMap.get(receiver);
+        const sData = rMap.get(sender);
+        const rData = rMap.get(receiver);
         if (!sData || !rData) return;
 
         const sPos = sData.localPos.clone().add(sData.nodeGroup.position);
         const rPos = rData.localPos.clone().add(rData.nodeGroup.position);
         const mid = sPos.clone().lerp(rPos, 0.5);
 
-        if (typeof setSelectedObject === "function") {
-            setSelectedObject(null);
+        if (window.VisualiserCore && typeof window.VisualiserCore.setSelectedObject === "function") {
+            window.VisualiserCore.setSelectedObject(null);
         }
-        if (typeof flyCameraTo === "function") {
-            flyCameraTo(mid);
+        if (window.VisualiserCore && typeof window.VisualiserCore.flyCameraTo === "function") {
+            window.VisualiserCore.flyCameraTo(mid);
         }
     }
 
@@ -280,7 +264,6 @@ function clearIssueIsolationUI() {
 
         thead.appendChild(tr);
         table.appendChild(thead);
-
         const tbody = document.createElement("tbody");
         table.appendChild(tbody);
 
@@ -355,9 +338,7 @@ function clearIssueIsolationUI() {
                 const ranksRow = document.createElement("div");
                 ranksRow.style.marginTop = "8px";
                 pattern.ranks.forEach(rank => {
-                    ranksRow.appendChild(
-                        createClickablePill(`rank ${rank}`, "#58a6ff", () => focusRankFromAnalytics(rank))
-                    );
+                    ranksRow.appendChild(createClickablePill(`rank ${rank}`, "#58a6ff", () => focusRankFromAnalytics(rank)));
                 });
                 row.appendChild(ranksRow);
             }
@@ -368,11 +349,7 @@ function clearIssueIsolationUI() {
                 pattern.pairs.slice(0, 5).forEach(pair => {
                     if (pair && Array.isArray(pair.ranks) && pair.ranks.length === 2) {
                         pairsRow.appendChild(
-                            createClickablePill(
-                                `${pair.ranks[0]} ↔ ${pair.ranks[1]}`,
-                                "#a371f7",
-                                () => focusLinkFromAnalytics(pair.ranks[0], pair.ranks[1])
-                            )
+                            createClickablePill(`${pair.ranks[0]} ↔ ${pair.ranks[1]}`, "#a371f7", () => focusLinkFromAnalytics(pair.ranks[0], pair.ranks[1]))
                         );
                     }
                 });
@@ -386,158 +363,146 @@ function clearIssueIsolationUI() {
     }
 
     function renderAnalysisIssuesCard(container, analysis) {
-    const issues = analysis.issues || [];
-    const { card, body } = createAnalyticsCard("Potential Performance Issues", "#f85149");
+        const issues = analysis.issues || [];
+        const { card, body } = createAnalyticsCard("Potential Performance Issues", "#f85149");
 
-    const focusedIssueIndex = getFocusedIssueIndexFrom3D();
+        const focusedIssueIndex = getFocusedIssueIndexFrom3D();
 
-    if (focusedIssueIndex != null && focusedIssueIndex >= 0 && focusedIssueIndex < issues.length) {
-        const activeIssue = issues[focusedIssueIndex];
+        if (focusedIssueIndex != null && focusedIssueIndex >= 0 && focusedIssueIndex < issues.length) {
+            const activeIssue = issues[focusedIssueIndex];
+            const banner = document.createElement("div");
+            banner.style.padding = "10px 12px";
+            banner.style.marginBottom = "12px";
+            banner.style.backgroundColor = "rgba(88, 166, 255, 0.08)";
+            banner.style.border = "1px solid #58a6ff";
+            banner.style.borderRadius = "6px";
+            banner.style.display = "flex";
+            banner.style.justifyContent = "space-between";
+            banner.style.alignItems = "center";
+            banner.style.gap = "12px";
 
-        const banner = document.createElement("div");
-        banner.style.padding = "10px 12px";
-        banner.style.marginBottom = "12px";
-        banner.style.backgroundColor = "rgba(88, 166, 255, 0.08)";
-        banner.style.border = "1px solid #58a6ff";
-        banner.style.borderRadius = "6px";
-        banner.style.display = "flex";
-        banner.style.justifyContent = "space-between";
-        banner.style.alignItems = "center";
-        banner.style.gap = "12px";
+            const text = document.createElement("div");
+            text.style.color = "#c9d1d9";
+            text.style.fontSize = "0.84rem";
+            text.innerHTML = `3D view is isolated to issue: <span style="color:#58a6ff; font-family:'Fira Code', monospace;">${String(activeIssue.type || "issue").replace(/_/g, " ")}</span>`;
 
-        const text = document.createElement("div");
-        text.style.color = "#c9d1d9";
-        text.style.fontSize = "0.84rem";
-        text.innerHTML = `3D view is isolated to issue: <span style="color:#58a6ff; font-family:'Fira Code', monospace;">${String(activeIssue.type || "issue").replace(/_/g, " ")}</span>`;
+            const btnClear = document.createElement("button");
+            btnClear.textContent = "Clear isolate";
+            btnClear.style.background = "#21262d";
+            btnClear.style.color = "#c9d1d9";
+            btnClear.style.border = "1px solid #30363d";
+            btnClear.style.borderRadius = "4px";
+            btnClear.style.padding = "4px 8px";
+            btnClear.style.cursor = "pointer";
+            btnClear.addEventListener("click", (e) => {
+                e.stopPropagation();
+                clearIssueIsolationUI();
+            });
 
-        const btnClear = document.createElement("button");
-        btnClear.textContent = "Clear isolate";
-        btnClear.style.background = "#21262d";
-        btnClear.style.color = "#c9d1d9";
-        btnClear.style.border = "1px solid #30363d";
-        btnClear.style.borderRadius = "4px";
-        btnClear.style.padding = "4px 8px";
-        btnClear.style.cursor = "pointer";
-        btnClear.addEventListener("click", (e) => {
-            e.stopPropagation();
-            clearIssueIsolationUI();
+            banner.appendChild(text);
+            banner.appendChild(btnClear);
+            body.appendChild(banner);
+        }
+
+        if (issues.length === 0) {
+            const empty = document.createElement("div");
+            empty.textContent = "No obvious performance issues were flagged by the heuristic analysis.";
+            empty.style.color = "#8b949e";
+            body.appendChild(empty);
+            container.appendChild(card);
+            return;
+        }
+
+        issues.forEach((issue, issueIndex) => {
+            const color = severityColour(issue.severity);
+            const isFocused = focusedIssueIndex === issueIndex;
+            const canIsolate = issueHasSpatialTargets(issue);
+
+            const box = document.createElement("div");
+            box.style.padding = "10px 12px";
+            box.style.marginBottom = "10px";
+            box.style.backgroundColor = isFocused ? "rgba(88, 166, 255, 0.08)" : "rgba(13, 17, 23, 0.75)";
+            box.style.border = `1px solid ${isFocused ? "#58a6ff" : color}`;
+            box.style.borderRadius = "6px";
+            box.style.boxShadow = isFocused ? "0 0 12px rgba(88,166,255,0.25)" : "none";
+
+            const top = document.createElement("div");
+            top.style.display = "flex";
+            top.style.justifyContent = "space-between";
+            top.style.alignItems = "center";
+            top.style.gap = "12px";
+
+            const title = document.createElement("div");
+            title.style.color = "#c9d1d9";
+            title.style.fontWeight = "700";
+            title.textContent = String(issue.type || "issue").replace(/_/g, " ");
+
+            const sev = document.createElement("div");
+            sev.textContent = `${String(issue.severity || "info").toUpperCase()} ${(issue.score || 0).toFixed(2)}`;
+            sev.style.color = isFocused ? "#58a6ff" : color;
+            sev.style.fontFamily = "'Fira Code', monospace";
+            sev.style.fontSize = "0.8rem";
+
+            const desc = document.createElement("div");
+            desc.style.color = "#8b949e";
+            desc.style.marginTop = "6px";
+            desc.style.fontSize = "0.85rem";
+            desc.textContent = issue.description || "";
+
+            box.appendChild(top);
+            top.appendChild(title);
+            top.appendChild(sev);
+            box.appendChild(desc);
+
+            const tags = document.createElement("div");
+            tags.style.marginTop = "8px";
+
+            if (Array.isArray(issue.ranks)) {
+                issue.ranks.forEach(rank => {
+                    tags.appendChild(createClickablePill(`rank ${rank}`, color, () => focusRankFromAnalytics(rank)));
+                });
+            }
+
+            if (Array.isArray(issue.pairs)) {
+                issue.pairs.forEach(pair => {
+                    if (Array.isArray(pair) && pair.length === 2) {
+                        tags.appendChild(createClickablePill(`${pair[0]} → ${pair[1]}`, color, () => focusLinkFromAnalytics(pair[0], pair[1])));
+                    }
+                });
+            }
+
+            if (tags.childNodes.length > 0) box.appendChild(tags);
+
+            const actions = document.createElement("div");
+            actions.style.display = "flex";
+            actions.style.gap = "8px";
+            actions.style.marginTop = "10px";
+            actions.style.flexWrap = "wrap";
+
+            const btnIsolate = document.createElement("button");
+            btnIsolate.textContent = isFocused ? "Clear 3D isolate" : "Isolate 3D";
+            btnIsolate.style.background = isFocused ? "#1f6feb" : "#21262d";
+            btnIsolate.style.color = "#c9d1d9";
+            btnIsolate.style.border = `1px solid ${isFocused ? "#58a6ff" : "#30363d"}`;
+            btnIsolate.style.borderRadius = "4px";
+            btnIsolate.style.padding = "4px 8px";
+            btnIsolate.style.cursor = canIsolate ? "pointer" : "not-allowed";
+            btnIsolate.disabled = !canIsolate;
+            btnIsolate.style.opacity = canIsolate ? "1" : "0.5";
+
+            btnIsolate.addEventListener("click", (e) => {
+                e.stopPropagation();
+                if (!canIsolate) return;
+                toggleIssueIsolation(issueIndex);
+            });
+
+            actions.appendChild(btnIsolate);
+            box.appendChild(actions);
+            body.appendChild(box);
         });
 
-        banner.appendChild(text);
-        banner.appendChild(btnClear);
-        body.appendChild(banner);
-    }
-
-    if (issues.length === 0) {
-        const empty = document.createElement("div");
-        empty.textContent = "No obvious performance issues were flagged by the heuristic analysis.";
-        empty.style.color = "#8b949e";
-        body.appendChild(empty);
         container.appendChild(card);
-        return;
     }
-
-    issues.forEach((issue, issueIndex) => {
-        const color = severityColour(issue.severity);
-        const isFocused = focusedIssueIndex === issueIndex;
-        const canIsolate = issueHasSpatialTargets(issue);
-
-        const box = document.createElement("div");
-        box.style.padding = "10px 12px";
-        box.style.marginBottom = "10px";
-        box.style.backgroundColor = isFocused ? "rgba(88, 166, 255, 0.08)" : "rgba(13, 17, 23, 0.75)";
-        box.style.border = `1px solid ${isFocused ? "#58a6ff" : color}`;
-        box.style.borderRadius = "6px";
-        box.style.boxShadow = isFocused ? "0 0 12px rgba(88,166,255,0.25)" : "none";
-
-        const top = document.createElement("div");
-        top.style.display = "flex";
-        top.style.justifyContent = "space-between";
-        top.style.alignItems = "center";
-        top.style.gap = "12px";
-
-        const title = document.createElement("div");
-        title.style.color = "#c9d1d9";
-        title.style.fontWeight = "700";
-        title.textContent = String(issue.type || "issue").replace(/_/g, " ");
-
-        const sev = document.createElement("div");
-        sev.textContent = `${String(issue.severity || "info").toUpperCase()} ${(issue.score || 0).toFixed(2)}`;
-        sev.style.color = isFocused ? "#58a6ff" : color;
-        sev.style.fontFamily = "'Fira Code', monospace";
-        sev.style.fontSize = "0.8rem";
-
-        const desc = document.createElement("div");
-        desc.style.color = "#8b949e";
-        desc.style.marginTop = "6px";
-        desc.style.fontSize = "0.85rem";
-        desc.textContent = issue.description || "";
-
-        box.appendChild(top);
-        top.appendChild(title);
-        top.appendChild(sev);
-        box.appendChild(desc);
-
-        const tags = document.createElement("div");
-        tags.style.marginTop = "8px";
-
-        if (Array.isArray(issue.ranks)) {
-            issue.ranks.forEach(rank => {
-                tags.appendChild(
-                    createClickablePill(`rank ${rank}`, color, () => focusRankFromAnalytics(rank))
-                );
-            });
-        }
-
-        if (Array.isArray(issue.pairs)) {
-            issue.pairs.forEach(pair => {
-                if (Array.isArray(pair) && pair.length === 2) {
-                    tags.appendChild(
-                        createClickablePill(`${pair[0]} → ${pair[1]}`, color, () => focusLinkFromAnalytics(pair[0], pair[1]))
-                    );
-                }
-            });
-        }
-
-        if (tags.childNodes.length > 0) {
-            box.appendChild(tags);
-        }
-
-        const actions = document.createElement("div");
-        actions.style.display = "flex";
-        actions.style.gap = "8px";
-        actions.style.marginTop = "10px";
-        actions.style.flexWrap = "wrap";
-
-        const btnIsolate = document.createElement("button");
-        btnIsolate.textContent = isFocused ? "Clear 3D isolate" : "Isolate 3D";
-        btnIsolate.style.background = isFocused ? "#1f6feb" : "#21262d";
-        btnIsolate.style.color = "#c9d1d9";
-        btnIsolate.style.border = `1px solid ${isFocused ? "#58a6ff" : "#30363d"}`;
-        btnIsolate.style.borderRadius = "4px";
-        btnIsolate.style.padding = "4px 8px";
-        btnIsolate.style.cursor = canIsolate ? "pointer" : "not-allowed";
-        btnIsolate.disabled = !canIsolate;
-        btnIsolate.style.opacity = canIsolate ? "1" : "0.5";
-        btnIsolate.title = canIsolate
-            ? "Show only this issue's related 3D highlights"
-            : "This issue does not have direct spatial targets to isolate";
-
-        btnIsolate.addEventListener("click", (e) => {
-            e.stopPropagation();
-            if (!canIsolate) return;
-            toggleIssueIsolation(issueIndex);
-        });
-
-        actions.appendChild(btnIsolate);
-        box.appendChild(actions);
-
-        body.appendChild(box);
-    });
-
-    container.appendChild(card);
-}
-
 
     function renderAnalysisTopRanksCard(container, analysis) {
         const ranks = analysis.top_ranks_by_touch_bytes || [];
@@ -713,23 +678,14 @@ function clearIssueIsolationUI() {
         if (spreads.length === 0) return;
 
         const { card, body } = createAnalyticsCard("Barrier Skew", "#f0883e");
-
-        const worst = [...spreads]
-            .sort((a, b) => (b.spread || 0) - (a.spread || 0))
-            .slice(0, 8);
-
+        const worst = [...spreads].sort((a, b) => (b.spread || 0) - (a.spread || 0)).slice(0, 8);
         const { table, tbody } = createAnalyticsTable(["Barrier", "Start", "End", "Spread"]);
 
         worst.forEach(item => {
             const tr = document.createElement("tr");
             tr.style.borderBottom = "1px solid #21262d";
 
-            [
-                item.barrier_index,
-                formatTimeValue(item.t_min || 0),
-                formatTimeValue(item.t_max || 0),
-                formatTimeValue(item.spread || 0)
-            ].forEach(val => {
+            [item.barrier_index, formatTimeValue(item.t_min || 0), formatTimeValue(item.t_max || 0), formatTimeValue(item.spread || 0)].forEach(val => {
                 const td = document.createElement("td");
                 td.style.padding = "8px";
                 td.style.color = "#c9d1d9";
@@ -801,12 +757,15 @@ function clearIssueIsolationUI() {
                 `Barriers: ${win.barrier_events || 0}`;
 
             bar.addEventListener("click", async () => {
-                if (typeof pausePlayback === "function") {
-                    pausePlayback();
-                }
-                const mid = ((win.t_start || 0) + (win.t_end || 0)) / 2;
-                if (typeof seekToTime === "function") {
-                    await seekToTime(mid);
+                // MODULARIZED PLAYBACK CONTROL
+                const btnPlay = document.getElementById("btn-play");
+                if (btnPlay && btnPlay.textContent.includes("Pause")) btnPlay.click();
+                
+                const slider = document.getElementById("timeSlider");
+                if (slider) {
+                    const mid = ((win.t_start || 0) + (win.t_end || 0)) / 2;
+                    slider.value = mid;
+                    slider.dispatchEvent(new Event("input")); // Triggers Provider seekToTime
                 }
             });
 
@@ -822,12 +781,17 @@ function clearIssueIsolationUI() {
         container.appendChild(card);
     }
 
-    function renderAnalytics() {
+    // --- MODULARIZED RENDER FUNCTION ---
+    // Now explicitly takes 'data' instead of looking for global 'parsedData'
+    function renderAnalytics(data) {
+        if (data) currentParsedData = data;
+        const pData = currentParsedData;
+
         const container = ensureAnalyticsContainer();
         container.innerHTML = "";
         analyticsWindowBars = [];
 
-        if (typeof parsedData === "undefined" || !parsedData || !parsedData.analysis) {
+        if (!pData || !pData.analysis) {
             const { card, body } = createAnalyticsCard("Analysis", "#8b949e");
             body.textContent = "No analytics data available in this profile.";
             body.style.color = "#8b949e";
@@ -835,7 +799,7 @@ function clearIssueIsolationUI() {
             return;
         }
 
-        const analysis = parsedData.analysis;
+        const analysis = pData.analysis;
 
         renderAnalysisSummaryCard(container, analysis);
         renderAnalysisPatternsCard(container, analysis);
@@ -846,8 +810,9 @@ function clearIssueIsolationUI() {
         renderAnalysisBarrierCard(container, analysis);
         renderAnalysisTimeWindowsCard(container, analysis);
 
-        const now = (typeof currentTime !== "undefined") ? currentTime : 0;
-        updateAnalyticsTimeWindowIndicator(now);
+        // We don't have access to global currentTime anymore, so we default to 0
+        // ProviderOffline will immediately call updateAnalyticsTimeWindowIndicator anyway.
+        updateAnalyticsTimeWindowIndicator(0);
     }
 
     function updateAnalyticsTimeWindowIndicator(time) {
@@ -855,15 +820,9 @@ function clearIssueIsolationUI() {
 
         analyticsWindowBars.forEach(win => {
             const active = time >= win.start && time <= win.end;
-            win.el.style.background = active
-                ? "rgba(63, 185, 80, 0.9)"
-                : "rgba(88, 166, 255, 0.45)";
-            win.el.style.border = active
-                ? "1px solid rgba(63, 185, 80, 1)"
-                : "1px solid rgba(88, 166, 255, 0.35)";
-            win.el.style.boxShadow = active
-                ? "0 0 12px rgba(63, 185, 80, 0.65)"
-                : "none";
+            win.el.style.background = active ? "rgba(63, 185, 80, 0.9)" : "rgba(88, 166, 255, 0.45)";
+            win.el.style.border = active ? "1px solid rgba(63, 185, 80, 1)" : "1px solid rgba(88, 166, 255, 0.35)";
+            win.el.style.boxShadow = active ? "0 0 12px rgba(63, 185, 80, 0.65)" : "none";
         });
     }
 
@@ -872,4 +831,3 @@ function clearIssueIsolationUI() {
         updateAnalyticsTimeWindowIndicator
     };
 })();
-

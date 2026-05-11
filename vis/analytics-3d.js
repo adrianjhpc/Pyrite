@@ -25,6 +25,7 @@
     };
 
     let options = Object.assign({}, DEFAULTS);
+    let currentAnalysis = null; // Store analysis data locally
 
     let rootGroup = null;
     let attachedObjects = [];
@@ -33,23 +34,23 @@
 
     let focusedIssueIndex = null;
 
+    // --- MODULARIZED GLOBALS CHECK ---
     function hasCoreGlobals() {
         return (
             typeof THREE !== "undefined" &&
-            typeof scene !== "undefined" &&
-            typeof rankMap !== "undefined" &&
-            typeof parsedData !== "undefined"
+            window.VisualiserCore &&
+            window.VisualiserCore.scene &&
+            window.VisualiserCore.rankMap
         );
     }
 
     function ensureRootGroup() {
         if (!hasCoreGlobals()) return null;
-
         if (rootGroup && rootGroup.parent) return rootGroup;
 
         rootGroup = new THREE.Group();
         rootGroup.name = "analytics3dRoot";
-        scene.add(rootGroup);
+        window.VisualiserCore.scene.add(rootGroup);
         return rootGroup;
     }
 
@@ -82,9 +83,7 @@
         if (!parent || !obj) return;
         try {
             parent.remove(obj);
-        } catch (e) {
-            // ignore
-        }
+        } catch (e) { }
     }
 
     function clearObjectsOnly() {
@@ -113,7 +112,6 @@
 
     function setEnabled(enabled) {
         options.enabled = !!enabled;
-
         if (!options.enabled) {
             clearObjectsOnly();
         } else {
@@ -123,12 +121,10 @@
 
     function mergeOptions(newOptions) {
         options = Object.assign({}, options, newOptions || {});
-
         if (!options.enabled) {
             clearObjectsOnly();
             return;
         }
-
         refreshHighlights();
     }
 
@@ -141,15 +137,11 @@
     }
 
     function focusIssue(issueIndex) {
-        if (!hasCoreGlobals() || !parsedData || !parsedData.analysis || !Array.isArray(parsedData.analysis.issues)) {
+        if (!hasCoreGlobals() || !currentAnalysis || !Array.isArray(currentAnalysis.issues)) {
             return;
         }
 
-        if (
-            issueIndex == null ||
-            issueIndex < 0 ||
-            issueIndex >= parsedData.analysis.issues.length
-        ) {
+        if (issueIndex == null || issueIndex < 0 || issueIndex >= currentAnalysis.issues.length) {
             clearFocus();
             return;
         }
@@ -160,12 +152,10 @@
 
     function clearFocus() {
         focusedIssueIndex = null;
-
         if (!options.enabled) {
             clearObjectsOnly();
             return;
         }
-
         refreshHighlights();
     }
 
@@ -220,13 +210,7 @@
             if (rank == null) return;
             const current = rankHighlights.get(rank);
             if (!current || priority > current.priority) {
-                rankHighlights.set(rank, {
-                    rank,
-                    kind,
-                    color,
-                    priority,
-                    reasons: [reason]
-                });
+                rankHighlights.set(rank, { rank, kind, color, priority, reasons: [reason] });
             } else if (current) {
                 current.reasons.push(reason);
             }
@@ -238,22 +222,13 @@
                 const priority = priorityForRankKind("issue", sev);
                 const color = pickColorForRank("issue", sev);
                 const ranks = Array.isArray(issue.ranks) ? issue.ranks : [];
-                ranks.forEach(rank => {
-                    addRank(rank, "issue", color, priority, issue.type || "issue");
-                });
+                ranks.forEach(rank => addRank(rank, "issue", color, priority, issue.type || "issue"));
             });
         }
 
         if (options.showCollectiveRoots && Array.isArray(analysis.collective_roots)) {
             analysis.collective_roots.slice(0, options.maxCollectiveRoots).forEach(rootInfo => {
-                const rank = rootInfo.root;
-                addRank(
-                    rank,
-                    "root",
-                    pickColorForRank("root"),
-                    priorityForRankKind("root"),
-                    "collective_root"
-                );
+                addRank(rootInfo.root, "root", pickColorForRank("root"), priorityForRankKind("root"), "collective_root");
             });
         }
 
@@ -261,26 +236,14 @@
             analysis.patterns.forEach(pattern => {
                 const ranks = Array.isArray(pattern.ranks) ? pattern.ranks : [];
                 ranks.forEach(rank => {
-                    addRank(
-                        rank,
-                        "pattern",
-                        pickColorForRank("pattern"),
-                        priorityForRankKind("pattern"),
-                        pattern.type || "pattern"
-                    );
+                    addRank(rank, "pattern", pickColorForRank("pattern"), priorityForRankKind("pattern"), pattern.type || "pattern");
                 });
             });
         }
 
         if (options.showTopRanks && Array.isArray(analysis.top_ranks_by_touch_bytes)) {
             analysis.top_ranks_by_touch_bytes.slice(0, options.maxTopRanks).forEach(item => {
-                addRank(
-                    item.rank,
-                    "top",
-                    pickColorForRank("top"),
-                    priorityForRankKind("top"),
-                    "top_rank"
-                );
+                addRank(item.rank, "top", pickColorForRank("top"), priorityForRankKind("top"), "top_rank");
             });
         }
 
@@ -295,15 +258,7 @@
             const key = `${sender}->${receiver}`;
             const current = linkHighlights.get(key);
             if (!current || priority > current.priority) {
-                linkHighlights.set(key, {
-                    sender,
-                    receiver,
-                    kind,
-                    color,
-                    priority,
-                    reason,
-                    bytes: bytesValue || 0
-                });
+                linkHighlights.set(key, { sender, receiver, kind, color, priority, reason, bytes: bytesValue || 0 });
             } else if (current) {
                 current.bytes = Math.max(current.bytes || 0, bytesValue || 0);
             }
@@ -314,7 +269,6 @@
                 const sev = issue.severity || "info";
                 const priority = priorityForLinkKind("issue", sev);
                 const color = pickColorForLink("issue", sev);
-
                 const pairs = Array.isArray(issue.pairs) ? issue.pairs : [];
                 pairs.forEach(pair => {
                     if (Array.isArray(pair) && pair.length === 2) {
@@ -326,15 +280,7 @@
 
         if (options.showTopLinks && Array.isArray(analysis.top_links)) {
             analysis.top_links.slice(0, options.maxTopLinks).forEach(link => {
-                addLink(
-                    link.sender,
-                    link.receiver,
-                    "top",
-                    pickColorForLink("top"),
-                    priorityForLinkKind("top"),
-                    "top_link",
-                    link.bytes || 0
-                );
+                addLink(link.sender, link.receiver, "top", pickColorForLink("top"), priorityForLinkKind("top"), "top_link", link.bytes || 0);
             });
         }
 
@@ -343,15 +289,7 @@
                 if (pattern.type !== "ping_pong" || !Array.isArray(pattern.pairs)) return;
                 pattern.pairs.slice(0, 4).forEach(pair => {
                     if (pair && Array.isArray(pair.ranks) && pair.ranks.length === 2) {
-                        addLink(
-                            pair.ranks[0],
-                            pair.ranks[1],
-                            "pingpong",
-                            pickColorForLink("pingpong"),
-                            priorityForLinkKind("pingpong"),
-                            "ping_pong",
-                            pair.bytes_total || 0
-                        );
+                        addLink(pair.ranks[0], pair.ranks[1], "pingpong", pickColorForLink("pingpong"), priorityForLinkKind("pingpong"), "ping_pong", pair.bytes_total || 0);
                     }
                 });
             });
@@ -359,26 +297,18 @@
 
         return Array.from(linkHighlights.values())
             .sort((a, b) => {
-                if ((b.priority || 0) !== (a.priority || 0)) {
-                    return (b.priority || 0) - (a.priority || 0);
-                }
+                if ((b.priority || 0) !== (a.priority || 0)) return (b.priority || 0) - (a.priority || 0);
                 return (b.bytes || 0) - (a.bytes || 0);
             })
             .slice(0, options.maxTopLinks + 4);
     }
 
     function collectFocusedIssueHighlights(analysis, issueIndex) {
-        const issue = analysis &&
-                      Array.isArray(analysis.issues) &&
-                      issueIndex != null &&
-                      issueIndex >= 0 &&
-                      issueIndex < analysis.issues.length
+        const issue = analysis && Array.isArray(analysis.issues) && issueIndex != null && issueIndex >= 0 && issueIndex < analysis.issues.length
             ? analysis.issues[issueIndex]
             : null;
 
-        if (!issue) {
-            return { ranks: [], links: [] };
-        }
+        if (!issue) return { ranks: [], links: [] };
 
         const sev = issue.severity || "info";
         const rankColor = pickColorForRank("issue", sev);
@@ -388,11 +318,8 @@
         const linkMap = new Map();
 
         const ranks = Array.isArray(issue.ranks) ? issue.ranks : [];
-        ranks.forEach(rank => {
-            if (rank != null) rankSet.add(rank);
-        });
+        ranks.forEach(rank => { if (rank != null) rankSet.add(rank); });
 
-        // Fallback: some issues encode a single spatial target in metrics.
         if (issue.metrics && Number.isInteger(issue.metrics.root)) {
             rankSet.add(issue.metrics.root);
         }
@@ -401,113 +328,62 @@
         pairs.forEach(pair => {
             if (Array.isArray(pair) && pair.length === 2 && pair[0] != null && pair[1] != null) {
                 linkMap.set(`${pair[0]}->${pair[1]}`, {
-                    sender: pair[0],
-                    receiver: pair[1],
-                    kind: "issue",
-                    color: linkColor,
-                    priority: priorityForLinkKind("issue", sev),
-                    reason: issue.type || "issue",
-                    bytes: 0
+                    sender: pair[0], receiver: pair[1], kind: "issue", color: linkColor,
+                    priority: priorityForLinkKind("issue", sev), reason: issue.type || "issue", bytes: 0
                 });
             }
         });
 
-        if (
-            issue.metrics &&
-            Number.isInteger(issue.metrics.sender) &&
-            Number.isInteger(issue.metrics.receiver)
-        ) {
+        if (issue.metrics && Number.isInteger(issue.metrics.sender) && Number.isInteger(issue.metrics.receiver)) {
             const k = `${issue.metrics.sender}->${issue.metrics.receiver}`;
             if (!linkMap.has(k)) {
                 linkMap.set(k, {
-                    sender: issue.metrics.sender,
-                    receiver: issue.metrics.receiver,
-                    kind: "issue",
-                    color: linkColor,
-                    priority: priorityForLinkKind("issue", sev),
-                    reason: issue.type || "issue",
-                    bytes: issue.metrics.bytes || 0
+                    sender: issue.metrics.sender, receiver: issue.metrics.receiver, kind: "issue", color: linkColor,
+                    priority: priorityForLinkKind("issue", sev), reason: issue.type || "issue", bytes: issue.metrics.bytes || 0
                 });
             }
         }
 
         return {
             ranks: Array.from(rankSet).map(rank => ({
-                rank,
-                kind: "issue",
-                color: rankColor,
-                priority: priorityForRankKind("issue", sev),
-                reasons: [issue.type || "issue"]
+                rank, kind: "issue", color: rankColor, priority: priorityForRankKind("issue", sev), reasons: [issue.type || "issue"]
             })),
             links: Array.from(linkMap.values())
         };
     }
 
+    // --- MODULARIZED MESH TARGETING ---
     function getRankWorldPosition(rankId) {
-        const r = rankMap.get(rankId);
+        const r = window.VisualiserCore.rankMap.get(rankId);
         if (!r || !r.nodeGroup) return null;
 
         r.nodeGroup.updateMatrixWorld(true);
-
         const pos = r.localPos.clone();
         pos.applyMatrix4(r.nodeGroup.matrixWorld);
         return pos;
     }
 
     function createRankHalo(highlight) {
-        const r = rankMap.get(highlight.rank);
+        const r = window.VisualiserCore.rankMap.get(highlight.rank);
         if (!r || !r.nodeGroup) return;
 
         const color = new THREE.Color(highlight.color);
         const radius = Math.max(0.22, ((r.depth || 0.2) * 0.9) + 0.16);
 
-        const outerMat = new THREE.MeshBasicMaterial({
-            color: color,
-            transparent: true,
-            opacity: 0.16,
-            depthWrite: false,
-            depthTest: false,
-            blending: THREE.AdditiveBlending
-        });
-
-        const wireMat = new THREE.MeshBasicMaterial({
-            color: color,
-            wireframe: true,
-            transparent: true,
-            opacity: 0.85,
-            depthWrite: false,
-            depthTest: false
-        });
-
-        const outerGeo = new THREE.SphereGeometry(radius, 14, 12);
-        const wireGeo = new THREE.SphereGeometry(radius * 1.22, 12, 10);
+        const outerMat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.16, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
+        const wireMat = new THREE.MeshBasicMaterial({ color: color, wireframe: true, transparent: true, opacity: 0.85, depthWrite: false, depthTest: false });
 
         const group = new THREE.Group();
-        group.name = "analytics3dRankHalo";
         group.position.copy(r.localPos);
-        group.userData = {
-            rank: highlight.rank,
-            reasons: highlight.reasons || [],
-            kind: highlight.kind
-        };
 
-        const outer = new THREE.Mesh(outerGeo, outerMat);
-        const wire = new THREE.Mesh(wireGeo, wireMat);
+        const outer = new THREE.Mesh(new THREE.SphereGeometry(radius, 14, 12), outerMat);
+        const wire = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.22, 12, 10), wireMat);
 
         group.add(outer);
         group.add(wire);
-
         attachToParent(r.nodeGroup, group);
 
-        animatedHalos.push({
-            group,
-            outer,
-            wire,
-            baseScale: 1.0,
-            color,
-            phase: Math.random() * Math.PI * 2,
-            speed: 0.0012 + Math.random() * 0.0008
-        });
+        animatedHalos.push({ group, outer, wire, phase: Math.random() * Math.PI * 2, speed: 0.0012 + Math.random() * 0.0008 });
     }
 
     function makeArcMidpoint(start, end, liftFactor, lateralOffset) {
@@ -516,11 +392,9 @@
         const dist = dir.length();
 
         let sideways = new THREE.Vector3(-dir.y, dir.x, 0);
-        if (sideways.lengthSq() < 1e-6) {
-            sideways = new THREE.Vector3(0, 1, 0);
-        }
+        if (sideways.lengthSq() < 1e-6) sideways = new THREE.Vector3(0, 1, 0);
+        
         sideways.normalize().multiplyScalar(lateralOffset);
-
         mid.add(sideways);
         mid.z += Math.max(3.0, dist * liftFactor);
         return mid;
@@ -535,55 +409,20 @@
         const liftFactor = (link.kind === "pingpong") ? 0.22 : 0.16;
         const lateral = (link.sender > link.receiver) ? 2.5 : -2.5;
         const mid = makeArcMidpoint(start, end, liftFactor, lateral);
-
         const curve = new THREE.QuadraticBezierCurve3(start, mid, end);
 
         const relative = maxBytes > 0 ? (link.bytes || 0) / maxBytes : 0;
         const radius = 0.10 + (0.22 * Math.min(1, relative));
 
-        const tubeGeo = new THREE.TubeGeometry(curve, 24, radius, 6, false);
-        const tubeMat = new THREE.MeshBasicMaterial({
-            color: color,
-            transparent: true,
-            opacity: 0.30,
-            depthWrite: false,
-            depthTest: false,
-            blending: THREE.AdditiveBlending
-        });
-
-        const linePoints = curve.getPoints(32);
-        const lineGeo = new THREE.BufferGeometry().setFromPoints(linePoints);
-        const lineMat = new THREE.LineBasicMaterial({
-            color: color,
-            transparent: true,
-            opacity: 0.85,
-            depthWrite: false,
-            depthTest: false
-        });
+        const tubeMat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.30, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
+        const lineMat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.85, depthWrite: false, depthTest: false });
+        const endpointMat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.65, depthWrite: false, depthTest: false });
 
         const group = new THREE.Group();
-        group.name = "analytics3dLink";
-        group.userData = {
-            sender: link.sender,
-            receiver: link.receiver,
-            reason: link.reason,
-            kind: link.kind
-        };
-
-        const tube = new THREE.Mesh(tubeGeo, tubeMat);
-        const line = new THREE.Line(lineGeo, lineMat);
-
-        const endpointGeo = new THREE.SphereGeometry(radius * 1.4, 10, 8);
-        const endpointMat = new THREE.MeshBasicMaterial({
-            color: color,
-            transparent: true,
-            opacity: 0.65,
-            depthWrite: false,
-            depthTest: false
-        });
-
-        const p1 = new THREE.Mesh(endpointGeo, endpointMat.clone());
-        const p2 = new THREE.Mesh(endpointGeo.clone(), endpointMat.clone());
+        const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 24, radius, 6, false), tubeMat);
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(curve.getPoints(32)), lineMat);
+        const p1 = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.4, 10, 8), endpointMat.clone());
+        const p2 = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.4, 10, 8), endpointMat.clone());
         p1.position.copy(start);
         p2.position.copy(end);
 
@@ -592,88 +431,66 @@
         group.add(p1);
         group.add(p2);
 
-        const root = ensureRootGroup();
-        attachToParent(root, group);
+        attachToParent(ensureRootGroup(), group);
 
         animatedLinks.push({
-            group,
-            tube,
-            line,
-            endpoints: [p1, p2],
-            phase: Math.random() * Math.PI * 2,
-            speed: 0.001 + Math.random() * 0.0006,
-            baseTubeOpacity: tubeMat.opacity,
-            baseLineOpacity: lineMat.opacity
+            group, tube, line, endpoints: [p1, p2], phase: Math.random() * Math.PI * 2, speed: 0.001 + Math.random() * 0.0006, baseTubeOpacity: tubeMat.opacity, baseLineOpacity: lineMat.opacity
         });
     }
 
-    function refreshHighlights(customOptions) {
+    // --- MODULARIZED REFRESH HIGHLIGHTS ---
+    // Now explicitly takes 'newAnalysis' instead of looking for global 'parsedData'
+    function refreshHighlights(customOptions, newAnalysis) {
         if (customOptions) {
             options = Object.assign({}, options, customOptions);
+        }
+        if (newAnalysis) {
+            currentAnalysis = newAnalysis;
         }
 
         clearObjectsOnly();
 
-        if (!options.enabled || !hasCoreGlobals() || !parsedData || !parsedData.analysis) {
+        if (!options.enabled || !hasCoreGlobals() || !currentAnalysis) {
             return;
         }
-
-        const analysis = parsedData.analysis;
 
         let rankHighlights = [];
         let linkHighlights = [];
 
         if (focusedIssueIndex != null) {
-            const focused = collectFocusedIssueHighlights(analysis, focusedIssueIndex);
+            const focused = collectFocusedIssueHighlights(currentAnalysis, focusedIssueIndex);
             rankHighlights = focused.ranks;
             linkHighlights = focused.links;
         } else {
-            rankHighlights = collectRankHighlights(analysis);
-            linkHighlights = collectLinkHighlights(analysis);
+            rankHighlights = collectRankHighlights(currentAnalysis);
+            linkHighlights = collectLinkHighlights(currentAnalysis);
         }
 
         rankHighlights.forEach(createRankHalo);
-
         const maxLinkBytes = Math.max(...linkHighlights.map(l => l.bytes || 0), 1);
         linkHighlights.forEach(link => createLinkHighlight(link, maxLinkBytes));
     }
 
     function update(timeMs) {
         if (!options.enabled) return;
-
         const t = Number(timeMs) || 0;
 
         animatedHalos.forEach(entry => {
             const s = 1.0 + 0.08 * Math.sin(t * entry.speed + entry.phase);
             const s2 = 1.0 + 0.14 * Math.sin(t * entry.speed * 0.8 + entry.phase + 0.8);
-
             entry.outer.scale.setScalar(s);
             entry.wire.scale.setScalar(s2);
-
-            if (entry.outer.material) {
-                entry.outer.material.opacity = 0.13 + 0.06 * (0.5 + 0.5 * Math.sin(t * entry.speed + entry.phase));
-            }
-            if (entry.wire.material) {
-                entry.wire.material.opacity = 0.55 + 0.25 * (0.5 + 0.5 * Math.sin(t * entry.speed * 1.1 + entry.phase));
-            }
+            if (entry.outer.material) entry.outer.material.opacity = 0.13 + 0.06 * (0.5 + 0.5 * Math.sin(t * entry.speed + entry.phase));
+            if (entry.wire.material) entry.wire.material.opacity = 0.55 + 0.25 * (0.5 + 0.5 * Math.sin(t * entry.speed * 1.1 + entry.phase));
         });
 
         animatedLinks.forEach(entry => {
             const pulse = 0.5 + 0.5 * Math.sin(t * entry.speed + entry.phase);
-
-            if (entry.tube.material) {
-                entry.tube.material.opacity = entry.baseTubeOpacity * (0.75 + 0.55 * pulse);
-            }
-            if (entry.line.material) {
-                entry.line.material.opacity = entry.baseLineOpacity * (0.75 + 0.45 * pulse);
-            }
-
+            if (entry.tube.material) entry.tube.material.opacity = entry.baseTubeOpacity * (0.75 + 0.55 * pulse);
+            if (entry.line.material) entry.line.material.opacity = entry.baseLineOpacity * (0.75 + 0.45 * pulse);
             entry.endpoints.forEach((pt, idx) => {
-                const scale = 1.0 + 0.15 * Math.sin(t * entry.speed * 1.15 + entry.phase + idx);
-                pt.scale.setScalar(scale);
-                if (pt.material) {
-                    pt.material.opacity = 0.50 + 0.25 * pulse;
-                }
+                pt.scale.setScalar(1.0 + 0.15 * Math.sin(t * entry.speed * 1.15 + entry.phase + idx));
+                if (pt.material) pt.material.opacity = 0.50 + 0.25 * pulse;
             });
         });
     }
@@ -687,7 +504,7 @@
         getConfig,
         getFocusedIssueIndex,
         focusIssue,
-        clearFocus
+        clearFocus,
+        setAnalysis: function(analysis) { refreshHighlights(null, analysis); } // Export new setter!
     };
 })();
-
