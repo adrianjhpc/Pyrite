@@ -195,7 +195,7 @@ const OfflineProvider = {
         }
     }
 
-    return activeEvents;
+    return activeEvents.reverse();
 },
 
 
