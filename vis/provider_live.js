@@ -101,7 +101,7 @@ const LiveProvider = {
             const callType = ev.call || ev.message_type;
             const cat = MPI_CATEGORIES[callType] || DEFAULT_CATEGORY;
             
-            if (cat.type === "collective") {
+            if (cat.type === "collective" || cat.type === "lifecycle") {
                 return ev.time >= minCollWin;
             }
             return ev.time >= minWin;

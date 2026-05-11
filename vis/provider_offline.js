@@ -183,7 +183,7 @@ const OfflineProvider = {
         const evTime = ev.time;
         const callType = ev.call || ev.message_type;
         const cat = MPI_CATEGORIES[callType] || DEFAULT_CATEGORY;
-        const isColl = (cat.type === "collective");
+        const isColl = (cat.type === "collective" || cat.type === "lifecycle");
 
         if (evTime >= minCollWin) {
             if (evTime >= minWin || isColl) {

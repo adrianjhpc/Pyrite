@@ -29,8 +29,8 @@ const MPI_CATEGORIES = {
     "MPI_GATHER": { type: "collective", color: 0xd29922 },
     "MPI_SCATTER": { type: "collective", color: 0xd29922 },
     "MPI_ALLGATHER": { type: "collective", color: 0xd29922 },
-    "MPI_INIT": { type: "state", color: 0x2ea043 }, 
-    "MPI_FINALIZE": { type: "state", color: 0x2ea043 },
+    "MPI_INIT": { type: "lifecycle", color: 0x2ea043 }, 
+    "MPI_FINALIZE": { type: "lifecycle", color: 0x2ea043 },
     "MPI_BARRIER": { type: "collective", color: 0xd29922 }
 };
 const DEFAULT_CATEGORY = { type: "unknown", color: 0x8b949e };
@@ -686,7 +686,7 @@ window.VisualiserCore = {
         leg.style.cssText = "position:absolute;bottom:20px;right:20px;background:rgba(22,27,34,0.85);border:1px solid #30363d;border-radius:8px;padding:12px 18px;color:#c9d1d9;font-family:'Fira Code', monospace;font-size:0.8rem;z-index:1000;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,0.5);backdrop-filter:blur(4px);";
         leg.innerHTML = `<div style="margin-bottom:10px;border-bottom:1px solid #30363d;padding-bottom:6px;color:#8b949e;"><strong>COMMUNICATION TYPES</strong></div>`;
         const unique = {}; Object.values(MPI_CATEGORIES).forEach(c => unique[c.type] = c.color);
-        const formatName = (str) => ({ "p2p_block": "P2P Blocking", "p2p_nonblock": "P2P Non-Blocking", "state": "Wait / Sync States", "collective": "Collectives" }[str] || str);
+        const formatName = (str) => ({ "p2p_block": "P2P Blocking", "p2p_nonblock": "P2P Non-Blocking", "state": "Wait / Sync States", "collective": "Collectives", "lifecycle": "Lifecycle (Init/End)" }[str] || str);
         Object.entries(unique).forEach(([t, hex]) => {
             const hexStr = '#' + hex.toString(16).padStart(6, '0');
             leg.innerHTML += `<div style="display:flex;align-items:center;margin-bottom:6px;"><div style="width:12px;height:12px;margin-right:10px;border-radius:2px;background-color:${hexStr};box-shadow:0 0 5px ${hexStr}"></div><span>${formatName(t)}</span></div>`;
